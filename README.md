@@ -12,7 +12,7 @@ The remote seed was verified on 2026-11-02 against the staged seed and its commi
 
 The contract lives in CONTRACT.md. The full contract landed with Round 1 slice 1 beside the setup obligations S1 to S5, and it states the checkpoint obligations and the limits of the slice. Wayside now records a checkpoint of a session state directory with declared env pairs and a memory document, and restores and forks and rewinds checkpoints from a store, and it does not yet snapshot database state.
 
-Closed perfection rounds are 0 of 100. A round counts only when a full cycle of work and audit and review and red team and approval has closed, and seeding and setup are not rounds.
+Closed perfection rounds are 1 of 100. A round counts only when a full cycle of work and audit and review and red team and approval has closed, and seeding and setup are not rounds.
 
 The local gate is python -m pytest -q plus python scripts/codepoint_scan.py, run on the exact final head before any push, with the continuous integration workflow running the same commands as a backstop.
 
