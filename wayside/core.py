@@ -39,7 +39,7 @@ SESSION_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$")
 SESSION_MAX = 64
 ENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
-SEQUENCE_DIR_PATTERN = re.compile(r"^[0-9]{6}$")
+SEQUENCE_DIR_PATTERN = re.compile(r"^[0-9]{6,}$")
 
 MANIFEST_KEYS = {"format", "session", "sequence", "created_at", "env", "memory", "files"}
 MEMORY_KEYS = {"sha256", "size"}
@@ -147,6 +147,46 @@ def _checkpoint_dir(root, session, sequence):
     return _checkpoints_dir(root, session) / _sequence_name(sequence)
 
 
+def _refuse_store_link(path, what):
+    if path.is_symlink():
+        raise CorruptCheckpointError(
+            f"the store is corrupt, {what} at {path} is a symbolic "
+            "link, and the store holds only real directories and "
+            "regular files"
+        )
+
+
+def _check_session_links(root, session):
+    """Refuse a planted link at any store component above a checkpoint.
+
+    The store's own writer creates only real directories inside the
+    store, so a symbolic link standing where the store keeps a
+    session is damage, and following it would write checkpoints
+    outside the store or read outside bytes as authoritative ones.
+    """
+    _refuse_store_link(_sessions_dir(root), "the sessions directory")
+    _refuse_store_link(
+        _session_dir(root, session), f"the directory of session {session}"
+    )
+    _refuse_store_link(
+        _checkpoints_dir(root, session),
+        f"the checkpoints directory of session {session}",
+    )
+
+
+def _check_checkpoint_links(root, session, sequence):
+    """Refuse a planted link at or inside one checkpoint directory."""
+    _check_session_links(root, session)
+    ck = _checkpoint_dir(root, session, sequence)
+    _refuse_store_link(ck, f"checkpoint {sequence} of session {session}")
+    for dirpath, dirnames, filenames in os.walk(ck):
+        for name in dirnames + filenames:
+            _refuse_store_link(
+                Path(dirpath) / name,
+                f"an entry of checkpoint {sequence} of session {session}",
+            )
+
+
 @contextmanager
 def _locked(root):
     try:
@@ -211,6 +251,12 @@ def _validate_recorded_path(rel, path):
     parts = rel.split("/")
     if any(part in ("", ".", "..") for part in parts):
         raise _corrupt(path, f"the recorded path {rel!r} is not a safe relative path")
+    if rel in RESERVED_TOP_LEVEL:
+        raise _corrupt(
+            path,
+            f"the recorded path {rel!r} names a file restore writes, "
+            "so it is not a path a checkpoint may record",
+        )
 
 
 def _validate_hash(value, path, what):
@@ -297,8 +343,15 @@ def _validate_manifest(data, path, session, sequence):
 def _load_manifest(root, session, sequence):
     """Read and strictly validate one manifest, changing nothing on disk."""
     ck = _checkpoint_dir(root, session, sequence)
+    _check_checkpoint_links(root, session, sequence)
     path = ck / MANIFEST_NAME
     if not path.is_file():
+        if ck.is_dir():
+            raise CorruptCheckpointError(
+                f"checkpoint {sequence} of session {session} is "
+                "corrupt, its manifest is missing or is not a regular "
+                "file, so the checkpoint cannot be read"
+            )
         raise NotFoundError(
             f"session {session} holds no checkpoint {sequence} in the store at {root}"
         )
@@ -424,6 +477,11 @@ def _publish(root, session, sequence, manifest, entries, memory):
     """Assemble a checkpoint under a temporary name and rename it into place."""
     ck_dir = _checkpoints_dir(root, session)
     final = ck_dir / _sequence_name(sequence)
+    if final.is_symlink():
+        raise CorruptCheckpointError(
+            f"checkpoint {sequence} of session {session} cannot be "
+            "published, a symbolic link stands at its name in the store"
+        )
     if final.exists():
         raise WaysideError(
             f"checkpoint {sequence} of session {session} already stands "
@@ -490,6 +548,7 @@ def checkpoint(store, session, state_dir, env=None, memory=b""):
         )
     entries = _read_state_tree(state)
     with _locked(root):
+        _check_session_links(root, session)
         ck_dir = _checkpoints_dir(root, session)
         try:
             ck_dir.mkdir(parents=True, exist_ok=True)
@@ -557,6 +616,7 @@ def rewind(store, session, sequence, target):
     root = Path(store)
     validate_session_id(session)
     _validate_sequence(sequence)
+    _check_session_links(root, session)
     _require_session(root, session)
     sequences = _published_sequences(root, session)
     if not sequences:
@@ -587,6 +647,7 @@ def fork(store, source_session, sequence, new_session):
     validate_session_id(new_session)
     _validate_sequence(sequence)
     with _locked(root):
+        _check_session_links(root, new_session)
         manifest = _load_manifest(root, source_session, sequence)
         entries, memory = _read_verified(root, source_session, sequence, manifest)
         if _published_sequences(root, new_session):
@@ -616,6 +677,7 @@ def list_checkpoints(store, session):
     """Return sequence and created_at for each published checkpoint in order."""
     root = Path(store)
     validate_session_id(session)
+    _check_session_links(root, session)
     _require_session(root, session)
     result = []
     for sequence in _published_sequences(root, session):

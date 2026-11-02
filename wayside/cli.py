@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 from . import core
-from .core import WaysideError
+from .core import InvalidNameError, WaysideError
 
 
 def _parse_env(pairs):
@@ -29,8 +29,14 @@ def _parse_env(pairs):
 def _read_memory(path):
     if path is None:
         return b""
+    memory_path = Path(path)
+    if memory_path.is_symlink() or not memory_path.is_file():
+        raise WaysideError(
+            f"the memory document at {path} is not a regular file, "
+            "so it cannot be read as a memory document"
+        )
     try:
-        return Path(path).read_bytes()
+        return memory_path.read_bytes()
     except OSError as exc:
         raise WaysideError(
             f"the memory document at {path} cannot be read, {exc}"
@@ -41,7 +47,7 @@ def _sequence_arg(text):
     try:
         return int(text)
     except ValueError:
-        raise WaysideError(
+        raise InvalidNameError(
             f"invalid sequence {text!r}, use a positive integer"
         ) from None
 
