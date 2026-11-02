@@ -30,7 +30,12 @@ def _read_memory(path):
     if path is None:
         return b""
     memory_path = Path(path)
-    if memory_path.is_symlink() or not memory_path.is_file():
+    if memory_path.is_symlink():
+        raise WaysideError(
+            f"the memory document at {path} is a symbolic link, "
+            "so it cannot be read as a memory document"
+        )
+    if not memory_path.is_file():
         raise WaysideError(
             f"the memory document at {path} is not a regular file, "
             "so it cannot be read as a memory document"

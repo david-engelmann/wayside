@@ -425,6 +425,17 @@ def _read_verified(root, session, sequence, manifest):
     return entries, memory
 
 
+def _walk_error(exc):
+    """Fail the walk when a directory in the state tree cannot be listed.
+
+    Without this callback os.walk swallows a listing failure and the
+    checkpoint would publish a partial tree as if it were complete.
+    """
+    raise WaysideError(
+        f"the state directory at {exc.filename} cannot be listed, {exc}"
+    ) from exc
+
+
 def _read_state_tree(state):
     """Read every regular file under the state directory, sorted by path.
 
@@ -433,7 +444,7 @@ def _read_state_tree(state):
     records only what the caller can see in the tree itself.
     """
     entries = []
-    for dirpath, dirnames, filenames in os.walk(state):
+    for dirpath, dirnames, filenames in os.walk(state, onerror=_walk_error):
         dirnames.sort()
         filenames.sort()
         for name in dirnames:
