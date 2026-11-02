@@ -58,4 +58,4 @@ The contract for this repo lives in CONTRACT.md and it defines the obligations t
 
 Mayfly makes the box, switchyard furnishes it, and wayside remembers where everything was. Wayside is the session checkpointing repo of the three, and its subject is the working state of agent sessions. This setup slice establishes the repo and its discipline only, and it claims no checkpointing behaviour and no feature behaviour of any kind.
 
-The first slice of wayside is the first build act of this repo and it lands under the full contract that arrives with it. There is no checkpointing machinery in the setup slice.
+The full contract is the first build act of this repo and it arrives with the first feature slice, which is a later slice than this setup slice.

@@ -44,21 +44,56 @@ def test_contract_names_five_setup_obligations():
     assert "Obligation S6" not in text
 
 
+def _status_section(text):
+    start = text.index("\n## Status\n") + len("\n## Status\n")
+    rest = text[start:]
+    end = rest.find("\n## ")
+    return rest if end == -1 else rest[:end]
+
+
 def test_readme_status_states_zero_of_one_hundred():
     text = read("README.md")
     assert "## Status" in text
-    assert "0 of 100" in text
-    assert "a9bdc896322b1787d0719d6a76baaf1d91ef8860" in text
+    status = _status_section(text)
+    assert "0 of 100" in status
+    assert "a9bdc896322b1787d0719d6a76baaf1d91ef8860" in status
 
 
 def _run_commands(ci_text):
     commands = []
+    step_lines = []
+
+    def flush_step():
+        if not step_lines:
+            return
+        disabled = False
+        runs = []
+        for stripped in step_lines:
+            if stripped.startswith("if:"):
+                value = stripped.split(":", 1)[1].strip().strip("'\"").lower()
+                if value == "false":
+                    disabled = True
+            if "run:" in stripped:
+                runs.append(stripped.split("run:", 1)[1].strip())
+        if not disabled:
+            commands.extend(runs)
+        step_lines.clear()
+
+    in_steps = False
     for line in ci_text.splitlines():
         stripped = line.strip()
         if stripped.startswith("#"):
             continue
-        if "run:" in stripped:
-            commands.append(stripped.split("run:", 1)[1].strip())
+        if stripped == "steps:":
+            in_steps = True
+            continue
+        if in_steps and stripped.startswith("- "):
+            flush_step()
+            step_lines.append(stripped[2:].strip())
+            continue
+        if in_steps:
+            step_lines.append(stripped)
+    flush_step()
     return commands
 
 
@@ -66,6 +101,22 @@ def test_ci_runs_the_local_gate_commands():
     commands = _run_commands(read(".github/workflows/ci.yml"))
     assert "python -m pytest -q" in commands
     assert "python scripts/codepoint_scan.py" in commands
+
+
+def test_ci_gate_parser_skips_a_step_disabled_with_if_false():
+    ci_text = read(".github/workflows/ci.yml")
+    gate_step = "      - name: Run the local gate\n        run: python -m pytest -q"
+    assert gate_step in ci_text
+    for flag in ("false", '"false"'):
+        disabled = ci_text.replace(
+            gate_step,
+            "      - name: Run the local gate\n"
+            f"        if: {flag}\n"
+            "        run: python -m pytest -q",
+        )
+        commands = _run_commands(disabled)
+        assert "python -m pytest -q" not in commands
+        assert "python scripts/codepoint_scan.py" in commands
 
 
 def test_codepoint_scan_reports_zero_for_the_repo():
@@ -136,9 +187,10 @@ def test_contract_obligations_carry_their_substance():
     text = read("CONTRACT.md")
     for phrase in (
         "present from the first commit",
+        "every later change lands through a pull request",
         "no network access and no paid service",
         "0 of 100 until a full cycle",
-        "a real trace or a real transcript or a real name",
+        "no file carries a real trace or a real transcript or a real name",
         "SHA-256 digest of the part above the marked line",
     ):
         assert phrase in text, phrase
@@ -163,3 +215,11 @@ def test_codepoint_scan_counts_a_dash_in_an_uppercase_suffix_file(tmp_path):
     result = _scan_tree(tmp_path)
     assert result.returncode == 1
     assert "em dash U+2014 count 1" in result.stdout
+
+
+def test_codepoint_scan_skips_a_file_with_an_uppercase_binary_suffix(tmp_path):
+    (tmp_path / "FAKE.PNG").write_text("a\u2014b", encoding="utf-8")
+    result = _scan_tree(tmp_path)
+    assert result.returncode == 0
+    assert "em dash U+2014 count 0" in result.stdout
+    assert "en dash U+2013 count 0" in result.stdout
