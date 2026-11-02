@@ -60,7 +60,7 @@ Manifest validation now refuses a recorded path that is exactly wayside.env or w
 
 Sequence directory matching now accepts six or more digits, so a sequence past 999999 stays visible to list and to sequence assignment. Before this repair the listing pattern matched exactly six digits while the name format grew past them, so sequence 1000000 published and then stood invisible to list, and later checkpoints failed behind an error that blamed the lock.
 
-The command line now refuses a memory document that is not a regular file before it reads anything, so a pipe named as the memory document fails with a clean error instead of hanging the command forever.
+The command line now refuses a memory document that is not a regular file before it reads anything, so a pipe named as the memory document fails with a clean error instead of hanging the command forever. The refusal covers a memory document named through a symbolic link as well as one that is not a regular file, and each shape fails with a message that names the shape it found.
 
 A standing sequence directory whose manifest is missing is now corruption and not absence. List and show and restore raise a corrupt checkpoint error naming the session and the sequence and the missing manifest, where before this repair list failed with a not found error claiming the checkpoint did not stand. Sequence assignment keeps counting the standing directory, so the hole in the sequence stays as honest damage and the next checkpoint takes the number after it.
 
