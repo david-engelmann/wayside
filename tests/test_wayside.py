@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -665,3 +666,305 @@ def test_cli_refuses_an_unsafe_session_id_without_a_traceback(tmp_path):
     assert result.stderr.startswith("error:")
     assert "Traceback" not in result.stderr
     assert not (tmp_path / "escape").exists()
+
+
+def test_checkpoint_refuses_a_symlinked_session_directory(tmp_path):
+    store = tmp_path / "store"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (Path(store) / "sessions").mkdir(parents=True)
+    (Path(store) / "sessions" / "ghost").symlink_to(
+        outside, target_is_directory=True
+    )
+    state = make_state(tmp_path / "state", {"a.txt": b"a"})
+    with pytest.raises(CorruptCheckpointError):
+        checkpoint(store, "ghost", state)
+    assert list(outside.iterdir()) == []
+
+
+def test_reads_refuse_a_symlinked_session_directory(tmp_path):
+    store = tmp_path / "store"
+    planted = tmp_path / "planted"
+    state = make_state(tmp_path / "state", {"planted.txt": b"outside-bytes"})
+    checkpoint(planted, "ghost", state)
+    (Path(store) / "sessions").mkdir(parents=True)
+    (Path(store) / "sessions" / "ghost").symlink_to(
+        planted / "sessions" / "ghost", target_is_directory=True
+    )
+    with pytest.raises(CorruptCheckpointError):
+        list_checkpoints(store, "ghost")
+    with pytest.raises(CorruptCheckpointError):
+        show(store, "ghost", 1)
+    target = tmp_path / "target"
+    with pytest.raises(CorruptCheckpointError):
+        restore(store, "ghost", 1, target)
+    assert not target.exists()
+
+
+def test_reads_and_writes_refuse_a_symlinked_checkpoints_directory(tmp_path):
+    store = tmp_path / "store"
+    state = make_state(tmp_path / "state", {"a.txt": b"a"})
+    checkpoint(store, "alpha", state)
+    ckpts = Path(store) / "sessions" / "alpha" / "checkpoints"
+    moved = tmp_path / "moved-checkpoints"
+    ckpts.rename(moved)
+    ckpts.symlink_to(moved, target_is_directory=True)
+    with pytest.raises(CorruptCheckpointError):
+        list_checkpoints(store, "alpha")
+    with pytest.raises(CorruptCheckpointError):
+        checkpoint(store, "alpha", state)
+    assert sorted(p.name for p in moved.iterdir()) == ["000001"]
+
+
+def test_reads_refuse_a_symlinked_sequence_directory(tmp_path):
+    store = tmp_path / "store"
+    planted = tmp_path / "planted"
+    state = make_state(tmp_path / "state", {"a.txt": b"a"})
+    checkpoint(store, "alpha", state)
+    checkpoint(store, "alpha", state)
+    checkpoint(planted, "alpha", state)
+    link = checkpoint_dir(store, "alpha", 2)
+    shutil.rmtree(link)
+    link.symlink_to(
+        checkpoint_dir(planted, "alpha", 1), target_is_directory=True
+    )
+    with pytest.raises(CorruptCheckpointError):
+        show(store, "alpha", 2)
+    with pytest.raises(CorruptCheckpointError):
+        list_checkpoints(store, "alpha")
+    target = tmp_path / "target"
+    with pytest.raises(CorruptCheckpointError):
+        restore(store, "alpha", 2, target)
+    assert not target.exists()
+
+
+def test_reads_refuse_a_symlinked_manifest(tmp_path):
+    store = tmp_path / "store"
+    state = make_state(tmp_path / "state", {"a.txt": b"a"})
+    checkpoint(store, "alpha", state)
+    path = manifest_path(store, "alpha", 1)
+    copy = tmp_path / "manifest-copy.json"
+    copy.write_bytes(path.read_bytes())
+    path.unlink()
+    path.symlink_to(copy)
+    with pytest.raises(CorruptCheckpointError):
+        show(store, "alpha", 1)
+
+
+def test_restore_refuses_a_symlinked_payload(tmp_path):
+    store = tmp_path / "store"
+    state = make_state(tmp_path / "state", {"a.txt": b"same bytes"})
+    checkpoint(store, "alpha", state)
+    payload = checkpoint_dir(store, "alpha", 1) / "files" / "a.txt"
+    twin = tmp_path / "twin.txt"
+    twin.write_bytes(b"same bytes")
+    payload.unlink()
+    payload.symlink_to(twin)
+    target = tmp_path / "target"
+    with pytest.raises(CorruptCheckpointError):
+        restore(store, "alpha", 1, target)
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("reserved", ["wayside.env", "wayside.memory"])
+def test_manifest_recording_a_reserved_name_is_refused(tmp_path, reserved):
+    store = tmp_path / "store"
+    state = make_state(tmp_path / "state", {"a.txt": b"payload-bytes-here"})
+    checkpoint(store, "alpha", state, env={"K": "V"}, memory=b"the memory")
+    ck = checkpoint_dir(store, "alpha", 1)
+    (ck / "files" / "a.txt").rename(ck / "files" / reserved)
+    manifest = json.loads(manifest_path(store, "alpha", 1).read_text())
+    manifest["files"][0]["path"] = reserved
+    manifest_path(store, "alpha", 1).write_text(json.dumps(manifest))
+    with pytest.raises(CorruptCheckpointError):
+        show(store, "alpha", 1)
+    target = tmp_path / "target"
+    with pytest.raises(CorruptCheckpointError):
+        restore(store, "alpha", 1, target)
+    assert not target.exists()
+
+
+def test_a_nested_reserved_name_restores_as_a_payload(tmp_path):
+    store = tmp_path / "store"
+    state = make_state(
+        tmp_path / "state", {"sub/wayside.env": b"nested payload"}
+    )
+    checkpoint(store, "alpha", state, env={"K": "V"})
+    target = tmp_path / "target"
+    restore(store, "alpha", 1, target)
+    assert (target / "sub" / "wayside.env").read_bytes() == b"nested payload"
+    assert "K=V" in (target / "wayside.env").read_text(encoding="utf-8")
+
+
+def test_sequences_past_a_million_stay_visible(tmp_path):
+    store = tmp_path / "store"
+    state = make_state(tmp_path / "state", {"a.txt": b"a"})
+    checkpoint(store, "alpha", state)
+    shutil.copytree(
+        checkpoint_dir(store, "alpha", 1), checkpoint_dir(store, "alpha", 999999)
+    )
+    manifest = json.loads(manifest_path(store, "alpha", 999999).read_text())
+    manifest["sequence"] = 999999
+    manifest_path(store, "alpha", 999999).write_text(json.dumps(manifest))
+    first = checkpoint(store, "alpha", state)
+    assert first["sequence"] == 1000000
+    second = checkpoint(store, "alpha", state)
+    assert second["sequence"] == 1000001
+    assert [e["sequence"] for e in list_checkpoints(store, "alpha")] == [
+        1,
+        999999,
+        1000000,
+        1000001,
+    ]
+    assert show(store, "alpha", 1000000)["sequence"] == 1000000
+
+
+def test_a_sequence_directory_without_a_manifest_is_corruption(tmp_path):
+    store = tmp_path / "store"
+    state = make_state(tmp_path / "state", {"a.txt": b"a"})
+    checkpoint(store, "alpha", state)
+    checkpoint_dir(store, "alpha", 5).mkdir(parents=True)
+    with pytest.raises(CorruptCheckpointError) as caught:
+        list_checkpoints(store, "alpha")
+    assert "manifest" in str(caught.value)
+    with pytest.raises(CorruptCheckpointError):
+        show(store, "alpha", 5)
+    with pytest.raises(CorruptCheckpointError):
+        restore(store, "alpha", 5, tmp_path / "target")
+    manifest = checkpoint(store, "alpha", state)
+    assert manifest["sequence"] == 6
+
+
+def damage_manifest_json(store, session, sequence, damage):
+    path = manifest_path(store, session, sequence)
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    damage(manifest)
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        lambda m: m["files"][0].update(size="3"),
+        lambda m: m.update(env=["K=V"]),
+        lambda m: m.update(files={}),
+        lambda m: m.update(sequence="1"),
+        lambda m: m.update(created_at=12345),
+        lambda m: m.update(created_at="not a timestamp"),
+    ],
+    ids=[
+        "size-as-string",
+        "env-as-list",
+        "files-as-object",
+        "sequence-as-string",
+        "created-at-not-text",
+        "created-at-unparseable",
+    ],
+)
+def test_manifest_with_a_wrong_typed_value_is_refused(tmp_path, damage):
+    store = tmp_path / "store"
+    state = make_state(tmp_path / "state", {"a.txt": b"a"})
+    checkpoint(store, "alpha", state, env={"K": "V"})
+    damage_manifest_json(store, "alpha", 1, damage)
+    with pytest.raises(CorruptCheckpointError):
+        show(store, "alpha", 1)
+
+
+@pytest.mark.parametrize("good_id", ["a", "x" * 64, "a-b_2"])
+def test_session_id_accepting_edges(tmp_path, good_id):
+    store = tmp_path / "store"
+    state = make_state(tmp_path / "state", {"a.txt": b"a"})
+    manifest = checkpoint(store, good_id, state)
+    assert manifest["session"] == good_id
+
+
+@pytest.mark.parametrize("bad_id", ["a-", "a_"])
+def test_session_ids_ending_in_a_separator_are_refused(tmp_path, bad_id):
+    store = tmp_path / "store"
+    state = make_state(tmp_path / "state", {"a.txt": b"a"})
+    with pytest.raises(InvalidNameError):
+        checkpoint(store, bad_id, state)
+
+
+def run_cli_timed(store, *args, timeout=20):
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(ROOT)
+    try:
+        return subprocess.run(
+            [sys.executable, "-m", "wayside", "--store", str(store), *args],
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+            env=env,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail("the command did not finish, it hung")
+
+
+def test_cli_memory_fifo_is_refused_promptly(tmp_path):
+    store = tmp_path / "store"
+    state = make_state(tmp_path / "state", {"a.txt": b"a"})
+    fifo = tmp_path / "memory.fifo"
+    os.mkfifo(fifo)
+    result = run_cli_timed(
+        store,
+        "checkpoint",
+        "alpha",
+        "--state",
+        str(state),
+        "--memory",
+        str(fifo),
+    )
+    assert result.returncode == 1
+    assert result.stderr.startswith("error:")
+    assert "not a regular file" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_cli_memory_directory_and_missing_file_are_refused(tmp_path):
+    store = tmp_path / "store"
+    state = make_state(tmp_path / "state", {"a.txt": b"a"})
+    result = run_cli_timed(
+        store,
+        "checkpoint",
+        "alpha",
+        "--state",
+        str(state),
+        "--memory",
+        str(tmp_path),
+    )
+    assert result.returncode == 1
+    assert result.stderr.startswith("error:")
+    assert "Traceback" not in result.stderr
+    result = run_cli_timed(
+        store,
+        "checkpoint",
+        "alpha",
+        "--state",
+        str(state),
+        "--memory",
+        str(tmp_path / "no-memory-here"),
+    )
+    assert result.returncode == 1
+    assert result.stderr.startswith("error:")
+    assert "Traceback" not in result.stderr
+
+
+def test_cli_sequence_errors_share_the_invalid_name_exit_code(tmp_path):
+    store = tmp_path / "store"
+    state = make_state(tmp_path / "state", {"a.txt": b"a"})
+    assert (
+        run_cli(store, "checkpoint", "alpha", "--state", str(state)).returncode
+        == 0
+    )
+    target = tmp_path / "target"
+    result = run_cli(store, "restore", "alpha", "abc", "--target", str(target))
+    assert result.returncode == 2
+    assert result.stderr.startswith("error:")
+    assert "invalid sequence" in result.stderr
+    result = run_cli(store, "restore", "alpha", "0", "--target", str(target))
+    assert result.returncode == 2
+    assert result.stderr.startswith("error:")
+    assert "invalid sequence" in result.stderr
+    assert not target.exists()
