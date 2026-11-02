@@ -56,6 +56,6 @@ Verify claims from the thing itself. A result is read from the file on disk, the
 
 The contract for this repo lives in CONTRACT.md and it defines the obligations this repo must meet. Read CONTRACT.md and the README before changing anything in wayside.
 
-Mayfly makes the box, switchyard furnishes it, and wayside remembers where everything was. Wayside is the session checkpointing repo of the three, and its subject is the working state of agent sessions. This setup slice establishes the repo and its discipline only, and it claims no checkpointing behaviour and no feature behaviour of any kind.
+Mayfly makes the box, switchyard furnishes it, and wayside remembers where everything was. Wayside is the session checkpointing repo of the three, and its subject is the working state of agent sessions. Round 1 slice 1 lands the checkpoint store. Wayside records a checkpoint of a session state directory with declared env pairs and a memory document into a store, and restores and forks and rewinds checkpoints from it, under the obligations in CONTRACT.md. Slice 1 does not snapshot database state and is not wired into the mayfly or switchyard runtimes.
 
-The full contract is the first build act of this repo and it arrives with the first feature slice, which is a later slice than this setup slice.
+The full contract was the first build act of this repo and it arrived with the first feature slice in Round 1, beside the setup obligations in CONTRACT.md.
