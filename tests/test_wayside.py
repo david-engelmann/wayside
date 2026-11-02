@@ -968,3 +968,77 @@ def test_cli_sequence_errors_share_the_invalid_name_exit_code(tmp_path):
     assert result.stderr.startswith("error:")
     assert "invalid sequence" in result.stderr
     assert not target.exists()
+
+
+def test_checkpoint_fails_when_a_state_subdirectory_cannot_be_listed(
+    tmp_path, monkeypatch
+):
+    store = tmp_path / "store"
+    state = make_state(
+        tmp_path / "state", {"sub/inner.txt": b"inner", "top.txt": b"top"}
+    )
+    real_scandir = os.scandir
+    blocked = os.fspath(state / "sub")
+
+    def fake_scandir(path):
+        if os.fspath(path) == blocked:
+            raise PermissionError(13, "permission denied", blocked)
+        return real_scandir(path)
+
+    monkeypatch.setattr(os, "scandir", fake_scandir)
+    try:
+        with pytest.raises(WaysideError) as excinfo:
+            checkpoint(store, "alpha", state)
+    finally:
+        monkeypatch.undo()
+    assert blocked in str(excinfo.value)
+    assert "cannot be listed" in str(excinfo.value)
+    assert not checkpoint_dir(store, "alpha", 1).exists()
+
+
+def test_checkpoint_fails_when_the_state_directory_cannot_be_listed(
+    tmp_path, monkeypatch
+):
+    store = tmp_path / "store"
+    state = make_state(tmp_path / "state", {"top.txt": b"top"})
+    real_scandir = os.scandir
+    blocked = os.fspath(state)
+
+    def fake_scandir(path):
+        if os.fspath(path) == blocked:
+            raise PermissionError(13, "permission denied", blocked)
+        return real_scandir(path)
+
+    monkeypatch.setattr(os, "scandir", fake_scandir)
+    try:
+        with pytest.raises(WaysideError) as excinfo:
+            checkpoint(store, "alpha", state)
+    finally:
+        monkeypatch.undo()
+    assert blocked in str(excinfo.value)
+    assert "cannot be listed" in str(excinfo.value)
+    assert not checkpoint_dir(store, "alpha", 1).exists()
+
+
+def test_cli_memory_symlink_is_refused_with_its_own_message(tmp_path):
+    store = tmp_path / "store"
+    state = make_state(tmp_path / "state", {"a.txt": b"a"})
+    real = tmp_path / "memory.txt"
+    real.write_bytes(b"memory")
+    link = tmp_path / "memory-link.txt"
+    link.symlink_to(real)
+    result = run_cli(
+        store,
+        "checkpoint",
+        "alpha",
+        "--state",
+        str(state),
+        "--memory",
+        str(link),
+    )
+    assert result.returncode == 1
+    assert result.stderr.startswith("error:")
+    assert "is a symbolic link" in result.stderr
+    assert "not a regular file" not in result.stderr
+    assert "Traceback" not in result.stderr
+    assert not checkpoint_dir(store, "alpha", 1).exists()
