@@ -1430,6 +1430,25 @@ fn manifest_with_a_lowercase_z_zone_after_a_fraction_is_refused() {
     });
 }
 
+// A leap second count of 60 in the seconds field and a year of zero
+// are two more shapes the Python reader refused that the RFC 3339
+// parser underneath this port takes, found by the CodeRabbit pass on
+// the repair head. Both read corrupt, exactly Python's class.
+
+#[test]
+fn manifest_with_a_leap_second_is_refused() {
+    wrong_typed_value_case("created-leap-second", &|value| {
+        value["created_at"] = serde_json::json!("2026-11-02T23:59:60+00:00");
+    });
+}
+
+#[test]
+fn manifest_with_a_year_of_zero_is_refused() {
+    wrong_typed_value_case("created-year-zero", &|value| {
+        value["created_at"] = serde_json::json!("0000-01-01T00:00:00+00:00");
+    });
+}
+
 fn session_id_accepted_case(tag: &str, good_id: &str) {
     let base = temp_dir(tag);
     let store = base.join("store");
