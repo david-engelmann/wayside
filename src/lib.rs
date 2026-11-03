@@ -502,14 +502,25 @@ const MANIFEST_KEYS: [&str; 7] = [
 
 /// Whether a recorded created_at parses under the reader the
 /// port accepts. The parse is chrono's RFC 3339 reader, with
-/// one tightening that keeps the accepted family the Python
+/// tightenings that keep the accepted family inside the Python
 /// reader's: chrono takes a lowercase z as the zone marker
 /// where Python's fromisoformat refused it, so a text ending
-/// in a lowercase z is refused here. In a text the parser
+/// in a lowercase z is refused here (in a text the parser
 /// accepts, a trailing lowercase z can only stand as the zone
-/// marker, so the ending check refuses exactly that shape.
+/// marker, so the ending check refuses exactly that shape);
+/// chrono folds a leap second into a nanosecond count of one
+/// billion or more where Python refused a seconds field of
+/// 60 outright; and chrono numbers years from zero where
+/// Python's reader starts at year one.
 fn created_at_parses(text: &str) -> bool {
-    !text.ends_with('z') && chrono::DateTime::parse_from_rfc3339(text).is_ok()
+    use chrono::Datelike;
+    if text.ends_with('z') {
+        return false;
+    }
+    match chrono::DateTime::parse_from_rfc3339(text) {
+        Ok(parsed) => parsed.timestamp_subsec_nanos() < 1_000_000_000 && parsed.year() >= 1,
+        Err(_) => false,
+    }
 }
 
 fn validate_manifest(
