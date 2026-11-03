@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "wayside"
+version = "0.1.0"
+description = "Checkpointing for agent sessions that snapshots the working state of files, env, and agent memory, so any run can resume, fork, or rewind."
+license = { text = "MIT" }
+requires-python = ">=3.9"
+
+[tool.maturin]
+module-name = "wayside._wayside"
+python-source = "../python"
