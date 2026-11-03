@@ -1310,6 +1310,46 @@ fn a_sequence_directory_without_a_manifest_is_corruption() {
     assert_eq!(manifest.sequence, 6);
 }
 
+#[test]
+fn sequence_allocation_at_the_top_of_the_range_still_assigns() {
+    let base = temp_dir("seq-top");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    std::fs::create_dir_all(checkpoint_dir(&store, "alpha", i64::MAX - 1)).unwrap();
+    let manifest = checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    assert_eq!(manifest.sequence, i64::MAX);
+    assert!(checkpoint_dir(&store, "alpha", i64::MAX).is_dir());
+    assert_eq!(show(&store, "alpha", i64::MAX).unwrap().sequence, i64::MAX);
+}
+
+#[test]
+fn sequence_allocation_past_the_top_of_the_range_is_refused() {
+    let base = temp_dir("seq-past-top");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    std::fs::create_dir_all(checkpoint_dir(&store, "alpha", i64::MAX)).unwrap();
+    let error = expect_error(checkpoint(&store, "alpha", &state, None, b""));
+    assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert_eq!(error.exit_code(), 1);
+    assert!(
+        error
+            .message()
+            .contains("no sequence past it can be assigned"),
+        "{}",
+        error.message()
+    );
+    let mut names: Vec<String> =
+        std::fs::read_dir(store.join("sessions").join("alpha").join("checkpoints"))
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+    names.sort();
+    assert_eq!(names, ["000001", "9223372036854775807"]);
+}
+
 fn wrong_typed_value_case(tag: &str, damage: &dyn Fn(&mut serde_json::Value)) {
     let base = temp_dir(tag);
     let store = base.join("store");
@@ -1360,6 +1400,33 @@ fn manifest_with_a_wrong_typed_value_is_refused_created_at_not_text() {
 fn manifest_with_a_wrong_typed_value_is_refused_created_at_unparseable() {
     wrong_typed_value_case("type-created-text", &|value| {
         value["created_at"] = serde_json::json!("not a timestamp");
+    });
+}
+
+#[test]
+fn manifest_with_an_uppercase_z_zone_is_accepted() {
+    let base = temp_dir("created-zulu");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["created_at"] = serde_json::json!("2026-11-02T10:00:00Z");
+    });
+    let manifest = show(&store, "alpha", 1).unwrap();
+    assert_eq!(manifest.created_at, "2026-11-02T10:00:00Z");
+}
+
+#[test]
+fn manifest_with_a_lowercase_z_zone_is_refused() {
+    wrong_typed_value_case("created-lower-z", &|value| {
+        value["created_at"] = serde_json::json!("2026-11-02T10:00:00z");
+    });
+}
+
+#[test]
+fn manifest_with_a_lowercase_z_zone_after_a_fraction_is_refused() {
+    wrong_typed_value_case("created-lower-z-frac", &|value| {
+        value["created_at"] = serde_json::json!("2026-11-02T10:00:00.5z");
     });
 }
 
