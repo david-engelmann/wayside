@@ -500,6 +500,18 @@ const MANIFEST_KEYS: [&str; 7] = [
     "files",
 ];
 
+/// Whether a recorded created_at parses under the reader the
+/// port accepts. The parse is chrono's RFC 3339 reader, with
+/// one tightening that keeps the accepted family the Python
+/// reader's: chrono takes a lowercase z as the zone marker
+/// where Python's fromisoformat refused it, so a text ending
+/// in a lowercase z is refused here. In a text the parser
+/// accepts, a trailing lowercase z can only stand as the zone
+/// marker, so the ending check refuses exactly that shape.
+fn created_at_parses(text: &str) -> bool {
+    !text.ends_with('z') && chrono::DateTime::parse_from_rfc3339(text).is_ok()
+}
+
 fn validate_manifest(
     data: &StrictValue,
     path: &Path,
@@ -544,7 +556,7 @@ fn validate_manifest(
     }
     let created_at = match object_get(entries, "created_at") {
         Some(StrictValue::Str(text)) => {
-            if chrono::DateTime::parse_from_rfc3339(text).is_err() {
+            if !created_at_parses(text) {
                 return Err(corrupt(
                     path,
                     "the created_at does not parse as a timestamp",
@@ -1478,7 +1490,17 @@ pub fn checkpoint_with_reader(
         ))
     })?;
     let sequences = published_sequences(store, session);
-    let sequence = sequences.last().map(|last| last + 1).unwrap_or(1);
+    let sequence = match sequences.last() {
+        Some(last) => last.checked_add(1).ok_or_else(|| {
+            Error::wayside(format!(
+                "session {session} stands at sequence {last} in the \
+                 store at {}, and no sequence past it can be \
+                 assigned, so the checkpoint is refused",
+                store.display()
+            ))
+        })?,
+        None => 1,
+    };
     let manifest = new_manifest(session, sequence, &env_map, &entries, memory, None);
     publish(store, session, sequence, &manifest, &entries, memory)?;
     Ok(manifest)
