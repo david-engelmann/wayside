@@ -1,0 +1,18 @@
+{
+  "created_at": "2026-11-03T06:18:08.182806+00:00",
+  "env": {},
+  "files": [
+    {
+      "path": "a.txt",
+      "sha256": "a67d5f46542514f52d658493fc9405829d2922cf1647574c838b6b86f125477a",
+      "size": 11
+    }
+  ],
+  "format": "wayside-checkpoint/1",
+  "memory": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "sequence": 2,
+  "session": "alpha"
+}

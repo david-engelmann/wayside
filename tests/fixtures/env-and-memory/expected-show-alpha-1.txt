@@ -1,0 +1,21 @@
+{
+  "created_at": "2026-11-03T06:18:16.201337+00:00",
+  "env": {
+    "LEVEL": "3",
+    "MODE": "synthetic"
+  },
+  "files": [
+    {
+      "path": "notes.txt",
+      "sha256": "0a78ffa87ac7d819d7b0d2d636970135cc1b0f359334cae527230aaae9b4eb64",
+      "size": 15
+    }
+  ],
+  "format": "wayside-checkpoint/1",
+  "memory": {
+    "sha256": "169e8c2fd45cbb4fe5ffa3745b3b4aa56d6bd7f9fa43a5f0b3026de42daf3497",
+    "size": 25
+  },
+  "sequence": 1,
+  "session": "alpha"
+}

@@ -1,0 +1,23 @@
+{
+  "created_at": "2026-11-03T06:18:06.087174+00:00",
+  "env": {},
+  "files": [
+    {
+      "path": "notes.txt",
+      "sha256": "0a78ffa87ac7d819d7b0d2d636970135cc1b0f359334cae527230aaae9b4eb64",
+      "size": 15
+    },
+    {
+      "path": "work/plan.txt",
+      "sha256": "c75bccf4839e3bcb90317713e0b7f3062a0e099013ca5f784457bd2b9d8c3354",
+      "size": 14
+    }
+  ],
+  "format": "wayside-checkpoint/1",
+  "memory": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "sequence": 1,
+  "session": "alpha"
+}
