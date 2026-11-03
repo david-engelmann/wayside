@@ -1,0 +1,23 @@
+{
+  "created_at": "2026-11-03T06:18:12.804385+00:00",
+  "env": {},
+  "files": [
+    {
+      "path": "a.txt",
+      "sha256": "8f8733fe14bec2a9aab0ced028135bf45b9b00e21b661295e970a2eef68d7ec2",
+      "size": 13
+    },
+    {
+      "path": "dir/b.txt",
+      "sha256": "f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753",
+      "size": 4
+    }
+  ],
+  "format": "wayside-checkpoint/1",
+  "memory": {
+    "sha256": "792fdff4e67be2b2acf5d8292f75d0eb4b2dec39f321361778bddd8a9c14c18c",
+    "size": 12
+  },
+  "sequence": 2,
+  "session": "alpha"
+}
