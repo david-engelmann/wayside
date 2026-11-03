@@ -16,6 +16,10 @@ Closed perfection rounds are 1 of 100. A round counts only when a full cycle of 
 
 The local gate is cargo test plus the codepoint scan run through cargo, run on the exact final head before any push, with the continuous integration workflow running the same commands as a backstop.
 
+## Python binding
+
+The crate carries a thin Python binding in the bindings directory, for the agent frameworks that call session checkpointing directly from Python. It exposes the same six operations as the command line, checkpoint and restore and rewind and fork and list and show, returning plain dictionaries of the manifest and list facts, and a refusal raises a subclass of WaysideError carrying the same message text the command line prints. The binding holds no logic of its own and every rule stays in the Rust library, whose suite remains the gate. Build it with maturin develop --manifest-path bindings/Cargo.toml inside a virtual environment, and the smoke test in tests/test_binding_smoke.py drives the full lifecycle through it.
+
 ## Licence
 
 MIT. See LICENSE.
