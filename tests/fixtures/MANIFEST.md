@@ -3,16 +3,17 @@
 These fixtures are the cross implementation equivalence proof for the
 wayside Rust port. Every store tree here was written by the Python
 implementation of wayside at main (merge
-537a74f3340356a62d297285adffecb341de8d52), extracted fresh to
-~/workspace/chat3-wayside-prep, and frozen byte for byte. All content
-is synthetic and was written for these fixtures.
+537a74f3340356a62d297285adffecb341de8d52), extracted fresh into a
+scratch checkout, and frozen byte for byte. All content is synthetic
+and was written for these fixtures.
 
-How each fixture was made: the fixture directory holds a produce.py
-that drives the Python library, and build_fixtures.py in this folder
-ran it and then recorded the truths. The exact production invocation
-per fixture was:
+How each fixture was made. During the port preparation, outside this
+repository, one produce.py per fixture drove the Python library and a
+build script ran them and then recorded the truths. The production
+scripts are not carried in this repository, which holds no Python
+from this round on. The exact production invocation per fixture was:
 
-    PYTHONPATH=~/workspace/chat3-wayside-prep python3 produce.py <store-dir>
+    PYTHONPATH=<python-checkout> python3 produce.py <store-dir>
 
 followed, per session and checkpoint, by the Python command line:
 

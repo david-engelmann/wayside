@@ -856,7 +856,6 @@ fn killed_writer_leaves_no_visible_checkpoint() {
     let mut last_store = base.join("store-never");
     for attempt in 0..5 {
         let store = base.join(format!("store{attempt}"));
-        last_store = store.clone();
         let mut child = Command::new(env!("CARGO_BIN_EXE_wayside"))
             .arg("--store")
             .arg(&store)
@@ -888,9 +887,9 @@ fn killed_writer_leaves_no_visible_checkpoint() {
                 None => std::thread::sleep(Duration::from_millis(1)),
             }
         }
-        if child.try_wait().unwrap().is_none() {
+        let killed = child.try_wait().unwrap().is_none();
+        if killed {
             child.kill().unwrap();
-            killed_mid_write = killed_mid_write || seen_tmp;
         }
         child.wait().unwrap();
         let visible = match list_checkpoints(&store, "victim") {
@@ -898,8 +897,19 @@ fn killed_writer_leaves_no_visible_checkpoint() {
             Err(Error::NotFound(_)) => Vec::new(),
             Err(error) => panic!("list after the kill failed otherwise: {error:?}"),
         };
-        assert_eq!(visible, []);
-        if killed_mid_write {
+        // A writer that finished before the kill, or was killed
+        // after its rename landed, leaves a complete checkpoint
+        // standing, and that is a clean outcome this attempt
+        // simply did not interrupt. Every visible checkpoint
+        // must read clean, which is the standing invariant, and
+        // the attempt counts as caught only when the kill landed
+        // mid write and nothing is visible.
+        for entry in &visible {
+            show(&store, "victim", entry.sequence).unwrap();
+        }
+        if killed && seen_tmp && visible.is_empty() {
+            killed_mid_write = true;
+            last_store = store.clone();
             break;
         }
     }
