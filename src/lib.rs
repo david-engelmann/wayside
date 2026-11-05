@@ -30,6 +30,12 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 pub const FORMAT_NAME: &str = "wayside-checkpoint/1";
+pub const FORMAT_V2: &str = "wayside-checkpoint/2";
+/// The largest summed size of the members of one declared
+/// database bundle, in bytes (WS-14). Capture reads its bundle
+/// twice under the store lock, so an unbounded bundle would be
+/// an unbounded lock hold against every other writer.
+pub const BUNDLE_BOUND: u64 = 268435456;
 const LOCK_NAME: &str = "wayside.lock";
 const SESSIONS_NAME: &str = "sessions";
 const CHECKPOINTS_NAME: &str = "checkpoints";
@@ -377,8 +383,28 @@ pub struct ForkRef {
     pub sequence: i128,
 }
 
+/// One recorded member of a database bundle, in the shape of a
+/// recorded file of wayside-checkpoint/1.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DatabaseMember {
+    pub path: String,
+    pub sha256: String,
+    pub size: i128,
+}
+
+/// One recorded database of a wayside-checkpoint/2 manifest:
+/// its declared path, the digest of its member payload bytes
+/// joined in bundle order, and its members in bundle order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DatabaseEntry {
+    pub path: String,
+    pub bundle_sha256: String,
+    pub members: Vec<DatabaseMember>,
+}
+
 /// A validated checkpoint manifest, in the shape of the
-/// wayside-checkpoint/1 format.
+/// wayside-checkpoint formats. The databases list stands empty
+/// for every wayside-checkpoint/1 document.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Manifest {
     pub format: String,
@@ -388,7 +414,41 @@ pub struct Manifest {
     pub env: BTreeMap<String, String>,
     pub memory: MemoryEntry,
     pub files: Vec<FileEntry>,
+    pub databases: Vec<DatabaseEntry>,
     pub forked_from: Option<ForkRef>,
+}
+
+/// How one database path stands across a comparison of two
+/// checkpoints.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DatabaseStanding {
+    /// Both sides record the path with the same bundle digest.
+    Equal,
+    /// Both sides record the path with different bundle digests.
+    Different,
+    /// Only the first sequence records the path.
+    OnlyFirst,
+    /// Only the second sequence records the path.
+    OnlySecond,
+}
+
+/// The standing of one database path in a comparison.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DatabaseComparison {
+    pub path: String,
+    pub standing: DatabaseStanding,
+}
+
+/// The outcome of comparing the recorded databases of two
+/// checkpoints of one session: the session, the two sequences
+/// in the order they were named, and one standing per database
+/// path recorded on either side, in path order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Comparison {
+    pub session: String,
+    pub first: i64,
+    pub second: i64,
+    pub databases: Vec<DatabaseComparison>,
 }
 
 /// The sequence and creation time list reports per checkpoint.
@@ -523,6 +583,165 @@ fn created_at_parses(text: &str) -> bool {
     }
 }
 
+/// Validate the databases field of a wayside-checkpoint/2
+/// manifest under the strictness of WS-15: exact field sets at
+/// both levels, recorded path rules on the database path and
+/// every member path, member paths standing as the database
+/// path followed by its -wal and -journal appendages in that
+/// order, databases in path order with no path repeated, and
+/// no database path or member path standing in the files list.
+fn validate_databases(
+    value: &StrictValue,
+    path: &Path,
+    file_paths: &[String],
+) -> Result<Vec<DatabaseEntry>> {
+    let items = match value {
+        StrictValue::Array(items) => items,
+        _ => return Err(corrupt(path, "the databases entry is not a list")),
+    };
+    if items.is_empty() {
+        return Err(corrupt(
+            path,
+            "the databases entry is empty, and a manifest that records \
+             databases names at least one",
+        ));
+    }
+    let mut databases = Vec::new();
+    let mut database_paths: Vec<String> = Vec::new();
+    let mut recorded_paths: Vec<String> = Vec::new();
+    for item in items {
+        let pairs = match item {
+            StrictValue::Object(pairs)
+                if pairs.len() == 3
+                    && object_get(pairs, "path").is_some()
+                    && object_get(pairs, "bundle_sha256").is_some()
+                    && object_get(pairs, "members").is_some() =>
+            {
+                pairs
+            }
+            _ => {
+                return Err(corrupt(
+                    path,
+                    "a database entry does not carry exactly path and \
+                     bundle_sha256 and members",
+                ))
+            }
+        };
+        let rel = validate_recorded_path(object_get(pairs, "path").unwrap(), path)?;
+        let bundle_sha256 = validate_hash(
+            object_get(pairs, "bundle_sha256").unwrap(),
+            path,
+            &format!("database entry for {rel}"),
+        )?;
+        let member_values = match object_get(pairs, "members") {
+            Some(StrictValue::Array(items)) => items,
+            _ => {
+                return Err(corrupt(
+                    path,
+                    &format!("the members entry of the database at {rel} is not a list"),
+                ))
+            }
+        };
+        if member_values.is_empty() {
+            return Err(corrupt(
+                path,
+                &format!("the database at {rel} carries no members"),
+            ));
+        }
+        let mut members = Vec::new();
+        for (index, member) in member_values.iter().enumerate() {
+            let member_pairs = match member {
+                StrictValue::Object(pairs)
+                    if pairs.len() == 3
+                        && object_get(pairs, "path").is_some()
+                        && object_get(pairs, "sha256").is_some()
+                        && object_get(pairs, "size").is_some() =>
+                {
+                    pairs
+                }
+                _ => {
+                    return Err(corrupt(
+                        path,
+                        "a database member entry does not carry exactly path \
+                         and sha256 and size",
+                    ))
+                }
+            };
+            let member_rel =
+                validate_recorded_path(object_get(member_pairs, "path").unwrap(), path)?;
+            let expected = match index {
+                0 => rel.clone(),
+                1 => format!("{rel}-wal"),
+                _ => format!("{rel}-journal"),
+            };
+            if member_rel != expected {
+                return Err(corrupt(
+                    path,
+                    &format!(
+                        "the member paths of the database at {rel} are not the \
+                         database path followed by its -wal and -journal \
+                         appendages in that order"
+                    ),
+                ));
+            }
+            let sha = validate_hash(
+                object_get(member_pairs, "sha256").unwrap(),
+                path,
+                &format!("database member entry for {member_rel}"),
+            )?;
+            let size = validate_size(
+                object_get(member_pairs, "size").unwrap(),
+                path,
+                &format!("database member entry for {member_rel}"),
+            )?;
+            members.push(DatabaseMember {
+                path: member_rel,
+                sha256: sha,
+                size,
+            });
+        }
+        database_paths.push(rel.clone());
+        recorded_paths.push(rel.clone());
+        for member in &members {
+            recorded_paths.push(member.path.clone());
+        }
+        databases.push(DatabaseEntry {
+            path: rel,
+            bundle_sha256,
+            members,
+        });
+    }
+    let mut sorted = database_paths.clone();
+    sorted.sort();
+    let mut deduped = database_paths.clone();
+    deduped.sort();
+    deduped.dedup();
+    if database_paths != sorted || deduped.len() != database_paths.len() {
+        return Err(corrupt(
+            path,
+            "the database entries are not in path order or repeat a path",
+        ));
+    }
+    let mut recorded_sorted = recorded_paths.clone();
+    recorded_sorted.sort();
+    recorded_sorted.dedup();
+    if recorded_sorted.len() != recorded_paths.len() {
+        return Err(corrupt(path, "the database entries repeat a path"));
+    }
+    for recorded in &recorded_paths {
+        if file_paths.contains(recorded) {
+            return Err(corrupt(
+                path,
+                &format!(
+                    "the path {recorded} stands both in the files list and \
+                     in a database entry"
+                ),
+            ));
+        }
+    }
+    Ok(databases)
+}
+
 fn validate_manifest(
     data: &StrictValue,
     path: &Path,
@@ -533,17 +752,24 @@ fn validate_manifest(
         StrictValue::Object(entries) => entries,
         _ => return Err(corrupt(path, "the top level is not an object")),
     };
+    let is_v2 = matches!(
+        object_get(entries, "format"),
+        Some(StrictValue::Str(text)) if text == FORMAT_V2
+    );
     let keys_sound = MANIFEST_KEYS
         .iter()
         .all(|key| object_get(entries, key).is_some())
-        && entries
-            .iter()
-            .all(|(key, _)| MANIFEST_KEYS.contains(&key.as_str()) || key == "forked_from");
+        && entries.iter().all(|(key, _)| {
+            MANIFEST_KEYS.contains(&key.as_str())
+                || key == "forked_from"
+                || (is_v2 && key == "databases")
+        })
+        && (!is_v2 || object_get(entries, "databases").is_some());
     if !keys_sound {
         return Err(corrupt(path, "the field set is not the recorded one"));
     }
     match object_get(entries, "format") {
-        Some(StrictValue::Str(text)) if text == FORMAT_NAME => {}
+        Some(StrictValue::Str(text)) if text == FORMAT_NAME || text == FORMAT_V2 => {}
         _ => return Err(corrupt(path, &format!("the format is not {FORMAT_NAME}"))),
     }
     match object_get(entries, "session") {
@@ -664,6 +890,11 @@ fn validate_manifest(
             "the file entries are not in path order or repeat a path",
         ));
     }
+    let databases = if is_v2 {
+        validate_databases(object_get(entries, "databases").unwrap(), path, &seen)?
+    } else {
+        Vec::new()
+    };
     let forked_from = match object_get(entries, "forked_from") {
         None => None,
         Some(StrictValue::Object(pairs))
@@ -708,13 +939,18 @@ fn validate_manifest(
         }
     };
     Ok(Manifest {
-        format: FORMAT_NAME.to_string(),
+        format: if is_v2 {
+            FORMAT_V2.to_string()
+        } else {
+            FORMAT_NAME.to_string()
+        },
         session: session.to_string(),
         sequence,
         created_at,
         env,
         memory,
         files,
+        databases,
         forked_from,
     })
 }
@@ -816,11 +1052,86 @@ fn render_files_array(files: &[FileEntry], level: usize, out: &mut String) {
     out.push(']');
 }
 
+fn render_members_array(members: &[DatabaseMember], level: usize, out: &mut String) {
+    if members.is_empty() {
+        out.push_str("[]");
+        return;
+    }
+    out.push_str("[\n");
+    let count = members.len();
+    for (index, member) in members.iter().enumerate() {
+        write_indent(out, level + 1);
+        out.push_str("{\n");
+        write_indent(out, level + 2);
+        escape_json_string("path", out);
+        out.push_str(": ");
+        escape_json_string(&member.path, out);
+        out.push_str(",\n");
+        write_indent(out, level + 2);
+        escape_json_string("sha256", out);
+        out.push_str(": ");
+        escape_json_string(&member.sha256, out);
+        out.push_str(",\n");
+        write_indent(out, level + 2);
+        escape_json_string("size", out);
+        out.push_str(": ");
+        out.push_str(&member.size.to_string());
+        out.push('\n');
+        write_indent(out, level + 1);
+        out.push('}');
+        if index + 1 < count {
+            out.push(',');
+        }
+        out.push('\n');
+    }
+    write_indent(out, level);
+    out.push(']');
+}
+
+fn render_databases_array(databases: &[DatabaseEntry], level: usize, out: &mut String) {
+    if databases.is_empty() {
+        out.push_str("[]");
+        return;
+    }
+    out.push_str("[\n");
+    let count = databases.len();
+    for (index, entry) in databases.iter().enumerate() {
+        write_indent(out, level + 1);
+        out.push_str("{\n");
+        write_indent(out, level + 2);
+        escape_json_string("bundle_sha256", out);
+        out.push_str(": ");
+        escape_json_string(&entry.bundle_sha256, out);
+        out.push_str(",\n");
+        write_indent(out, level + 2);
+        escape_json_string("members", out);
+        out.push_str(": ");
+        render_members_array(&entry.members, level + 2, out);
+        out.push_str(",\n");
+        write_indent(out, level + 2);
+        escape_json_string("path", out);
+        out.push_str(": ");
+        escape_json_string(&entry.path, out);
+        out.push('\n');
+        write_indent(out, level + 1);
+        out.push('}');
+        if index + 1 < count {
+            out.push(',');
+        }
+        out.push('\n');
+    }
+    write_indent(out, level);
+    out.push(']');
+}
+
 /// Render a manifest exactly as the Python implementation's
 /// sorted, two space indented json rendering renders it, with
 /// no trailing newline. The stored manifest file carries this
 /// text plus one newline, and the show command prints this text
-/// plus one newline, so the two are byte identical.
+/// plus one newline, so the two are byte identical. A
+/// wayside-checkpoint/2 manifest renders by its own format
+/// value, with the databases field standing in the sorted key
+/// order the rendering keeps, after created_at.
 pub fn render_manifest(manifest: &Manifest) -> String {
     let mut out = String::new();
     out.push_str("{\n");
@@ -831,6 +1142,15 @@ pub fn render_manifest(manifest: &Manifest) -> String {
     field.push_str(": ");
     escape_json_string(&manifest.created_at, &mut field);
     fields.push(field);
+
+    if manifest.format == FORMAT_V2 {
+        let mut field = String::new();
+        write_indent(&mut field, 1);
+        escape_json_string("databases", &mut field);
+        field.push_str(": ");
+        render_databases_array(&manifest.databases, 1, &mut field);
+        fields.push(field);
+    }
 
     let mut field = String::new();
     write_indent(&mut field, 1);
@@ -1122,12 +1442,48 @@ fn load_manifest(root: &Path, session: &str, sequence: i64) -> Result<Manifest> 
     validate_manifest(&data, &path, session, sequence)
 }
 
+/// Read one payload of a checkpoint from its files area and
+/// check it against its recorded hash and size.
+fn read_payload(
+    ck: &Path,
+    session: &str,
+    sequence: i64,
+    rel: &str,
+    sha256: &str,
+    size: i128,
+) -> Result<Vec<u8>> {
+    let mut payload = ck.join(FILES_NAME);
+    for part in rel.split('/') {
+        payload.push(part);
+    }
+    if !payload.is_file() {
+        return Err(Error::Corrupt(format!(
+            "checkpoint {sequence} of session {session} is corrupt, \
+             the payload for {rel} is missing"
+        )));
+    }
+    let data = fs::read(&payload).map_err(|exc| {
+        Error::Corrupt(format!(
+            "checkpoint {sequence} of session {session} is corrupt, \
+             the payload for {rel} cannot be read, {exc}"
+        ))
+    })?;
+    if data.len() as i128 != size || sha256_hex(&data) != sha256 {
+        return Err(Error::Corrupt(format!(
+            "checkpoint {sequence} of session {session} is corrupt, \
+             the payload for {rel} does not match its recorded hash and size"
+        )));
+    }
+    Ok(data)
+}
+
 /// Read every payload of a checkpoint and check it against the
-/// manifest. Returns the file entries as relative path and
-/// bytes pairs in manifest order together with the memory
-/// bytes. Nothing is placed anywhere by this read, so a caller
-/// can verify a whole checkpoint before it writes a single
-/// byte of it.
+/// manifest: the recorded files, then every database member,
+/// then the memory document. Returns the payload entries as
+/// relative path and bytes pairs in that order together with
+/// the memory bytes. Nothing is placed anywhere by this read,
+/// so a caller can verify a whole checkpoint before it writes
+/// a single byte of it.
 fn read_verified(
     root: &Path,
     session: &str,
@@ -1137,32 +1493,28 @@ fn read_verified(
     let ck = checkpoint_dir(root, session, sequence);
     let mut entries = Vec::new();
     for entry in &manifest.files {
-        let mut payload = ck.join(FILES_NAME);
-        for part in entry.path.split('/') {
-            payload.push(part);
-        }
-        if !payload.is_file() {
-            return Err(Error::Corrupt(format!(
-                "checkpoint {sequence} of session {session} is corrupt, \
-                 the payload for {} is missing",
-                entry.path
-            )));
-        }
-        let data = fs::read(&payload).map_err(|exc| {
-            Error::Corrupt(format!(
-                "checkpoint {sequence} of session {session} is corrupt, \
-                 the payload for {} cannot be read, {exc}",
-                entry.path
-            ))
-        })?;
-        if data.len() as i128 != entry.size || sha256_hex(&data) != entry.sha256 {
-            return Err(Error::Corrupt(format!(
-                "checkpoint {sequence} of session {session} is corrupt, \
-                 the payload for {} does not match its recorded hash and size",
-                entry.path
-            )));
-        }
+        let data = read_payload(
+            &ck,
+            session,
+            sequence,
+            &entry.path,
+            &entry.sha256,
+            entry.size,
+        )?;
         entries.push((entry.path.clone(), data));
+    }
+    for database in &manifest.databases {
+        for member in &database.members {
+            let data = read_payload(
+                &ck,
+                session,
+                sequence,
+                &member.path,
+                &member.sha256,
+                member.size,
+            )?;
+            entries.push((member.path.clone(), data));
+        }
     }
     let memory_path = ck.join(MEMORY_NAME);
     if !memory_path.is_file() {
@@ -1187,7 +1539,43 @@ fn read_verified(
     Ok((entries, memory))
 }
 
-/// The reader the state tree walk lists directories through.
+/// What a staged byte rule serves for one path once its read
+/// count reaches the rule's first staged read.
+enum ByteFate {
+    /// Serve these bytes instead of the bytes on disk.
+    Serve(Vec<u8>),
+    /// Fail the read as if the file did not stand.
+    Missing,
+}
+
+/// A staged override of the bytes of one path, standing from a
+/// named read of that path onward.
+struct ByteRule {
+    path: PathBuf,
+    from_read: usize,
+    fate: ByteFate,
+}
+
+/// What a staged standing rule reports for one path once its
+/// probe count reaches the rule's first staged probe.
+enum ProbeFate {
+    /// Report the path standing with this size.
+    Appear(u64),
+    /// Report the path not standing.
+    Vanish,
+}
+
+/// A staged override of the standing of one path, standing
+/// from a named probe of that path onward.
+struct ProbeRule {
+    path: PathBuf,
+    from_probe: usize,
+    fate: ProbeFate,
+}
+
+/// The reader the state tree walk lists directories through,
+/// and the reader a database capture reads its bundle members
+/// through.
 ///
 /// The default reader lists with fs::read_dir. The seam exists
 /// for the two walk error pins: the Python suite staged a
@@ -1198,12 +1586,24 @@ fn read_verified(
 /// one named path through this reader instead. The seam
 /// changes no default behaviour, and the port amendment in
 /// CONTRACT.md names it as a reshaping.
+///
+/// Round 4 extends the seam to the reads a bundle capture
+/// makes: the bytes of a member and the standing of a sidecar
+/// name. Staged readers override one path from its second read
+/// or its second standing probe onward, so a pin can stage a
+/// bundle that changes between the two passes of WS-13
+/// deterministically, without racing a real writer. The
+/// default reader reads and stats the files themselves.
 pub struct StateTreeReader {
     lister: Box<Lister>,
+    byte_rules: Vec<ByteRule>,
+    probe_rules: Vec<ProbeRule>,
+    counts: std::sync::Mutex<BTreeMap<PathBuf, [usize; 2]>>,
 }
 
 impl StateTreeReader {
-    /// The production reader, listing with fs::read_dir.
+    /// The production reader, listing with fs::read_dir and
+    /// reading and statting files as they stand.
     pub fn new() -> StateTreeReader {
         StateTreeReader {
             lister: Box::new(|dir| {
@@ -1213,6 +1613,9 @@ impl StateTreeReader {
                 }
                 Ok(paths)
             }),
+            byte_rules: Vec::new(),
+            probe_rules: Vec::new(),
+            counts: std::sync::Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -1232,11 +1635,133 @@ impl StateTreeReader {
                     (inner.lister)(dir)
                 }
             }),
+            byte_rules: Vec::new(),
+            probe_rules: Vec::new(),
+            counts: std::sync::Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// A reader that serves the given bytes for the named path
+    /// on every bundle read of it, staging a bundle whose bytes
+    /// at capture differ from the bytes the tree walk read.
+    pub fn serving_bytes(path: &Path, bytes: Vec<u8>) -> StateTreeReader {
+        let mut reader = StateTreeReader::new();
+        reader.byte_rules.push(ByteRule {
+            path: path.to_path_buf(),
+            from_read: 1,
+            fate: ByteFate::Serve(bytes),
+        });
+        reader
+    }
+
+    /// A reader that serves the given bytes for the named path
+    /// from its second bundle read onward, staging a member
+    /// that changes between the two passes of a capture.
+    pub fn altering_bytes_on_second_read(path: &Path, bytes: Vec<u8>) -> StateTreeReader {
+        let mut reader = StateTreeReader::new();
+        reader.byte_rules.push(ByteRule {
+            path: path.to_path_buf(),
+            from_read: 2,
+            fate: ByteFate::Serve(bytes),
+        });
+        reader
+    }
+
+    /// A reader whose bundle read of the named path fails as
+    /// if the file did not stand from its second read onward,
+    /// staging a member that vanishes between the two passes.
+    pub fn dropping_on_second_read(path: &Path) -> StateTreeReader {
+        let mut reader = StateTreeReader::new();
+        reader.byte_rules.push(ByteRule {
+            path: path.to_path_buf(),
+            from_read: 2,
+            fate: ByteFate::Missing,
+        });
+        reader
+    }
+
+    /// A reader that reports the named path standing with the
+    /// given size from its second standing probe onward,
+    /// staging a sidecar that appears between the two passes.
+    pub fn appearing_on_second_probe(path: &Path, size: u64) -> StateTreeReader {
+        let mut reader = StateTreeReader::new();
+        reader.probe_rules.push(ProbeRule {
+            path: path.to_path_buf(),
+            from_probe: 2,
+            fate: ProbeFate::Appear(size),
+        });
+        reader
+    }
+
+    /// A reader that reports the named path not standing from
+    /// its second standing probe onward, staging a sidecar
+    /// that disappears between the two passes.
+    pub fn vanishing_on_second_probe(path: &Path) -> StateTreeReader {
+        let mut reader = StateTreeReader::new();
+        reader.probe_rules.push(ProbeRule {
+            path: path.to_path_buf(),
+            from_probe: 2,
+            fate: ProbeFate::Vanish,
+        });
+        reader
     }
 
     fn list(&self, dir: &Path) -> io::Result<Vec<PathBuf>> {
         (self.lister)(dir)
+    }
+
+    /// Count one read or one standing probe of a path, in the
+    /// slot the caller names, and return the new count.
+    fn bump(&self, path: &Path, slot: usize) -> usize {
+        let mut counts = self
+            .counts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let entry = counts.entry(path.to_path_buf()).or_insert([0, 0]);
+        entry[slot] += 1;
+        entry[slot]
+    }
+
+    /// Read the bytes of one bundle member, through any staged
+    /// rule that stands for the path.
+    pub fn read_bytes(&self, path: &Path) -> io::Result<Vec<u8>> {
+        let read = self.bump(path, 0);
+        for rule in &self.byte_rules {
+            if rule.path == path && read >= rule.from_read {
+                match &rule.fate {
+                    ByteFate::Serve(bytes) => return Ok(bytes.clone()),
+                    ByteFate::Missing => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::NotFound,
+                            "the file does not stand",
+                        ))
+                    }
+                }
+            }
+        }
+        fs::read(path)
+    }
+
+    /// Report the standing of one bundle member name: the size
+    /// of the file when the path stands as a regular file, and
+    /// nothing when it does not stand, through any staged rule
+    /// that stands for the path.
+    pub fn member_len(&self, path: &Path) -> io::Result<Option<u64>> {
+        let probe = self.bump(path, 1);
+        for rule in &self.probe_rules {
+            if rule.path == path && probe >= rule.from_probe {
+                match rule.fate {
+                    ProbeFate::Appear(size) => return Ok(Some(size)),
+                    ProbeFate::Vanish => return Ok(None),
+                }
+            }
+        }
+        match fs::metadata(path) {
+            Ok(meta) if meta.is_file() => Ok(Some(meta.len())),
+            Ok(_) => Ok(None),
+            Err(exc) if exc.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(exc) => Err(exc),
+        }
     }
 }
 
@@ -1423,11 +1948,16 @@ fn new_manifest(
     sequence: i64,
     env: &BTreeMap<String, String>,
     entries: &[(String, Vec<u8>)],
+    databases: Vec<DatabaseEntry>,
     memory: &[u8],
     forked_from: Option<ForkRef>,
 ) -> Manifest {
     Manifest {
-        format: FORMAT_NAME.to_string(),
+        format: if databases.is_empty() {
+            FORMAT_NAME.to_string()
+        } else {
+            FORMAT_V2.to_string()
+        },
         session: session.to_string(),
         sequence,
         created_at: now_isoformat(),
@@ -1444,8 +1974,161 @@ fn new_manifest(
                 size: data.len() as i128,
             })
             .collect(),
+        databases,
         forked_from,
     }
+}
+
+/// Check one declared database path against the recorded
+/// path rules of WS-5 and the reservation of WS-1, as a caller
+/// error naming the path and the reason (WS-11).
+fn validate_declared_path(rel: &str) -> Result<()> {
+    let unsafe_path = rel.is_empty()
+        || rel.starts_with('/')
+        || rel.contains('\\')
+        || rel.contains('\0')
+        || rel
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..");
+    if unsafe_path {
+        return Err(Error::wayside(format!(
+            "the declared database path {} is not a safe relative path \
+             inside the state directory",
+            py_repr(rel)
+        )));
+    }
+    if RESERVED_TOP_LEVEL.contains(&rel) {
+        return Err(Error::wayside(format!(
+            "the declared database path {rel} names a top level file \
+             restore writes, so it cannot name a database"
+        )));
+    }
+    Ok(())
+}
+
+/// Check the whole declaration list of a checkpoint (WS-11)
+/// and return the declared paths in path order. Every refusal
+/// here lands before any byte is copied and before any
+/// sequence number is assigned.
+fn validate_declarations(declared: &[String]) -> Result<Vec<String>> {
+    for rel in declared {
+        validate_declared_path(rel)?;
+    }
+    for (index, rel) in declared.iter().enumerate() {
+        if declared[..index].contains(rel) {
+            return Err(Error::wayside(format!(
+                "the database path {rel} is declared twice"
+            )));
+        }
+    }
+    for rel in declared {
+        for other in declared {
+            if rel != other
+                && (rel.as_str() == format!("{other}-wal")
+                    || rel.as_str() == format!("{other}-journal"))
+            {
+                return Err(Error::wayside(format!(
+                    "the declared database path {rel} is the sidecar of \
+                     the declared database path {other}, and a sidecar \
+                     rides in the bundle of its main file"
+                )));
+            }
+        }
+    }
+    let mut sorted = declared.to_vec();
+    sorted.sort();
+    Ok(sorted)
+}
+
+/// The bundle bound refusal of WS-14, naming the bound.
+fn bound_error(rel: &str) -> Error {
+    Error::wayside(format!(
+        "the bundle of the database at {rel} sums past the bundle \
+         bound of {BUNDLE_BOUND} bytes, so the checkpoint is refused"
+    ))
+}
+
+/// The state directory path a recorded relative path names.
+fn join_rel(base: &Path, rel: &str) -> PathBuf {
+    let mut path = base.to_path_buf();
+    for part in rel.split('/') {
+        path.push(part);
+    }
+    path
+}
+
+/// The bytes the tree walk read for one relative path, when
+/// the walk read that path.
+fn walked_bytes<'a>(entries: &'a [(String, Vec<u8>)], rel: &str) -> Option<&'a [u8]> {
+    entries
+        .iter()
+        .find(|(seen, _)| seen == rel)
+        .map(|(_, data)| data.as_slice())
+}
+
+/// The three names of one bundle, in bundle order: the main
+/// file, its -wal appendage, and its -journal appendage.
+fn bundle_names(rel: &str) -> [String; 3] {
+    [
+        rel.to_string(),
+        format!("{rel}-wal"),
+        format!("{rel}-journal"),
+    ]
+}
+
+/// One reading of a bundle at the source (WS-13): the main
+/// file's bytes, and the bytes of each sidecar that stands,
+/// read through the reader seam, with the counted copy
+/// refusing the bundle as it passes the bound of WS-14. A
+/// member that cannot be read whole fails the reading as a
+/// change during capture, which is the true summary of every
+/// case that reaches a pass: the tree walk read every member
+/// whole before the lock, so a member that cannot be read
+/// whole now is a member that moved.
+fn read_bundle_pass(
+    state_dir: &Path,
+    declared_rel: &str,
+    reader: &StateTreeReader,
+) -> Result<Vec<(String, Vec<u8>)>> {
+    let changed = || {
+        Error::wayside(format!(
+            "the database at {declared_rel} changed during capture, so the \
+             checkpoint is refused"
+        ))
+    };
+    let mut members: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut total: u128 = 0;
+    let names = bundle_names(declared_rel);
+    for (index, member_rel) in names.iter().enumerate() {
+        let member_path = join_rel(state_dir, member_rel);
+        if index > 0 {
+            match reader.member_len(&member_path) {
+                Ok(Some(_)) => {}
+                Ok(None) => continue,
+                Err(_) => return Err(changed()),
+            }
+        }
+        let data = reader.read_bytes(&member_path).map_err(|_| changed())?;
+        total += data.len() as u128;
+        if total > BUNDLE_BOUND as u128 {
+            return Err(bound_error(declared_rel));
+        }
+        members.push((member_rel.clone(), data));
+    }
+    Ok(members)
+}
+
+/// Whether two readings of one bundle agree: the same members
+/// in the same order, each with the same size and the same
+/// hash (WS-13).
+fn readings_agree(
+    first: &[(String, Vec<u8>)],
+    second: &[(String, Vec<u8>)],
+) -> bool {
+    first.len() == second.len()
+        && first.iter().zip(second.iter()).all(|((rel_a, a), (rel_b, b))| {
+            rel_a == rel_b && a.len() == b.len() && sha256_hex(a) == sha256_hex(b)
+        })
 }
 
 /// Record a new checkpoint of the session from the state
@@ -1481,18 +2164,127 @@ pub fn checkpoint_with_reader(
     memory: &[u8],
     reader: &StateTreeReader,
 ) -> Result<Manifest> {
+    checkpoint_inner(store, session, state_dir, env, memory, &[], reader)
+}
+
+/// Record a new checkpoint declaring database bundles
+/// (WS-11). Each declared path names a file inside the state
+/// directory whose bundle is captured under the consistency
+/// proof of WS-13, and the checkpoint is recorded in
+/// wayside-checkpoint/2. With no declaration the result is a
+/// wayside-checkpoint/1 checkpoint, byte for byte as the
+/// landed checkpoint writes it.
+pub fn checkpoint_with_databases(
+    store: &Path,
+    session: &str,
+    state_dir: &Path,
+    env: Option<&BTreeMap<String, String>>,
+    memory: &[u8],
+    databases: &[String],
+) -> Result<Manifest> {
+    checkpoint_inner(
+        store,
+        session,
+        state_dir,
+        env,
+        memory,
+        databases,
+        &StateTreeReader::new(),
+    )
+}
+
+/// Checkpoint with declared databases through a named state
+/// tree reader, the seam the bundle pins stage through.
+pub fn checkpoint_with_databases_and_reader(
+    store: &Path,
+    session: &str,
+    state_dir: &Path,
+    env: Option<&BTreeMap<String, String>>,
+    memory: &[u8],
+    databases: &[String],
+    reader: &StateTreeReader,
+) -> Result<Manifest> {
+    checkpoint_inner(store, session, state_dir, env, memory, databases, reader)
+}
+
+fn checkpoint_inner(
+    store: &Path,
+    session: &str,
+    state_dir: &Path,
+    env: Option<&BTreeMap<String, String>>,
+    memory: &[u8],
+    declared: &[String],
+    reader: &StateTreeReader,
+) -> Result<Manifest> {
     validate_session_id(session)?;
     let env_map = env.cloned().unwrap_or_default();
     validate_env(&env_map)?;
+    let declared = validate_declarations(declared)?;
     if !state_dir.is_dir() {
         return Err(Error::wayside(format!(
             "the state directory at {} does not exist or is not a directory",
             state_dir.display()
         )));
     }
-    let entries = read_state_tree(state_dir, reader)?;
+    let walked = read_state_tree(state_dir, reader)?;
+    // Standing and bound validation against the walked list:
+    // each declared path must name a regular file the walk
+    // read, and the standing members of each bundle must sum
+    // within the bound, all before the lock is taken.
+    let mut member_paths: Vec<String> = Vec::new();
+    let mut shm_paths: Vec<String> = Vec::new();
+    for rel in &declared {
+        if walked_bytes(&walked, rel).is_none() {
+            return Err(Error::wayside(format!(
+                "the declared database path {rel} does not name a regular \
+                 file standing in the state directory"
+            )));
+        }
+        let mut total: u128 = 0;
+        for name in bundle_names(rel) {
+            if let Some(data) = walked_bytes(&walked, &name) {
+                total += data.len() as u128;
+                member_paths.push(name);
+            }
+        }
+        if total > BUNDLE_BOUND as u128 {
+            return Err(bound_error(rel));
+        }
+        shm_paths.push(format!("{rel}-shm"));
+    }
     let _lock = locked(store)?;
     check_session_links(store, session)?;
+    // The two pass proof of WS-13, under the store lock: read
+    // every bundle twice and refuse a bundle whose readings
+    // disagree, before any sequence is assigned.
+    let mut bundles: Vec<(String, Vec<(String, Vec<u8>)>)> = Vec::new();
+    for rel in &declared {
+        let first = read_bundle_pass(state_dir, rel, reader)?;
+        let second = read_bundle_pass(state_dir, rel, reader)?;
+        if !readings_agree(&first, &second) {
+            return Err(Error::wayside(format!(
+                "the database at {rel} changed during capture, so the \
+                 checkpoint is refused"
+            )));
+        }
+        bundles.push((rel.clone(), first));
+    }
+    // Recording is single: bundle member paths leave the file
+    // list and the member bytes ride in the payload set once,
+    // and the -shm companion of a declared database is left
+    // out of the recording entirely.
+    let file_entries: Vec<(String, Vec<u8>)> = walked
+        .iter()
+        .filter(|(rel, _)| !member_paths.contains(rel) && !shm_paths.contains(rel))
+        .cloned()
+        .collect();
+    let mut payloads = file_entries.clone();
+    for (_, members) in &bundles {
+        for (member_rel, data) in members {
+            payloads.push((member_rel.clone(), data.clone()));
+        }
+    }
+    payloads.sort_by(|a, b| a.0.cmp(&b.0));
     let ck_dir = checkpoints_dir(store, session);
     fs::create_dir_all(&ck_dir).map_err(|exc| {
         Error::wayside(format!(
@@ -1512,8 +2304,37 @@ pub fn checkpoint_with_reader(
         })?,
         None => 1,
     };
-    let manifest = new_manifest(session, sequence, &env_map, &entries, memory, None);
-    publish(store, session, sequence, &manifest, &entries, memory)?;
+    let databases: Vec<DatabaseEntry> = bundles
+        .iter()
+        .map(|(rel, members)| {
+            let mut joined: Vec<u8> = Vec::new();
+            for (_, data) in members {
+                joined.extend_from_slice(data);
+            }
+            DatabaseEntry {
+                path: rel.clone(),
+                bundle_sha256: sha256_hex(&joined),
+                members: members
+                    .iter()
+                    .map(|(member_rel, data)| DatabaseMember {
+                        path: member_rel.clone(),
+                        sha256: sha256_hex(data),
+                        size: data.len() as i128,
+                    })
+                    .collect(),
+            }
+        })
+        .collect();
+    let manifest = new_manifest(
+        session,
+        sequence,
+        &env_map,
+        &file_entries,
+        databases,
+        memory,
+        None,
+    );
+    publish(store, session, sequence, &manifest, &payloads, memory)?;
     Ok(manifest)
 }
 
@@ -1648,19 +2469,22 @@ pub fn fork(
             store.display()
         ))
     })?;
-    let new_manifest = new_manifest(
-        new_session,
-        1,
-        &manifest.env,
-        &entries,
-        &memory,
-        Some(ForkRef {
+    let forked = Manifest {
+        format: manifest.format.clone(),
+        session: new_session.to_string(),
+        sequence: 1,
+        created_at: now_isoformat(),
+        env: manifest.env.clone(),
+        memory: manifest.memory.clone(),
+        files: manifest.files.clone(),
+        databases: manifest.databases.clone(),
+        forked_from: Some(ForkRef {
             session: source_session.to_string(),
             sequence: sequence as i128,
         }),
-    );
-    publish(store, new_session, 1, &new_manifest, &entries, &memory)?;
-    Ok(new_manifest)
+    };
+    publish(store, new_session, 1, &forked, &entries, &memory)?;
+    Ok(forked)
 }
 
 /// Return sequence and created_at for each published
@@ -1685,4 +2509,79 @@ pub fn show(store: &Path, session: &str, sequence: i64) -> Result<Manifest> {
     validate_session_id(session)?;
     validate_sequence(sequence)?;
     load_manifest(store, session, sequence)
+}
+
+/// Verify one checkpoint against its own record (WS-17):
+/// read the manifest strictly under its own format's rules,
+/// then re-read every recorded payload, the files and every
+/// database member and the memory document, and fail with the
+/// corrupt checkpoint error naming the first payload whose
+/// bytes do not match their recorded hash and size. Verify
+/// writes nothing and creates nothing and takes no lock, and
+/// it returns the manifest of the clean checkpoint.
+pub fn verify_checkpoint(store: &Path, session: &str, sequence: i64) -> Result<Manifest> {
+    validate_session_id(session)?;
+    validate_sequence(sequence)?;
+    let manifest = load_manifest(store, session, sequence)?;
+    read_verified(store, session, sequence, &manifest)?;
+    Ok(manifest)
+}
+
+/// Compare the recorded databases of two checkpoints of one
+/// session (WS-18): read both manifests strictly and no
+/// payload bytes, and report for every database path recorded
+/// on either side whether the two sides stand equal, stand
+/// different, or the path stands on one side only. Compare
+/// answers from the record alone and says nothing about what
+/// stands in the store now.
+pub fn compare_checkpoints(
+    store: &Path,
+    session: &str,
+    first: i64,
+    second: i64,
+) -> Result<Comparison> {
+    validate_session_id(session)?;
+    validate_sequence(first)?;
+    validate_sequence(second)?;
+    let first_manifest = load_manifest(store, session, first)?;
+    let second_manifest = load_manifest(store, session, second)?;
+    let first_digests: BTreeMap<&str, &str> = first_manifest
+        .databases
+        .iter()
+        .map(|entry| (entry.path.as_str(), entry.bundle_sha256.as_str()))
+        .collect();
+    let second_digests: BTreeMap<&str, &str> = second_manifest
+        .databases
+        .iter()
+        .map(|entry| (entry.path.as_str(), entry.bundle_sha256.as_str()))
+        .collect();
+    let mut paths: Vec<&str> = first_digests.keys().copied().collect();
+    for path in second_digests.keys() {
+        if !first_digests.contains_key(path) {
+            paths.push(path);
+        }
+    }
+    paths.sort_unstable();
+    let databases = paths
+        .iter()
+        .map(|path| {
+            let standing = match (first_digests.get(path), second_digests.get(path)) {
+                (Some(left), Some(right)) if left == right => DatabaseStanding::Equal,
+                (Some(_), Some(_)) => DatabaseStanding::Different,
+                (Some(_), None) => DatabaseStanding::OnlyFirst,
+                (None, Some(_)) => DatabaseStanding::OnlySecond,
+                (None, None) => DatabaseStanding::Equal,
+            };
+            DatabaseComparison {
+                path: path.to_string(),
+                standing,
+            }
+        })
+        .collect();
+    Ok(Comparison {
+        session: session.to_string(),
+        first,
+        second,
+        databases,
+    })
 }
