@@ -79,3 +79,122 @@ Six reshapings are named here, because the obligations and the observable behavi
 A further difference is recorded here as a safe direction divergence, found by the red team review of this port. A recorded size or a forked_from sequence wider than an unsigned 64 bit integer is refused at read time by this reader. The Python reader took such a shape at show, and where the number was a recorded size it refused only when a restore compared the size against the bytes it named, and where the number was a forked_from sequence it took the value without refusal, the lineage being informational. No manifest either implementation writes can carry such a number, because sizes are byte counts of payloads that stand on disk and sequences are assigned upward from 1, so the difference meets only a hand damaged manifest, and it refuses earlier rather than later.
 
 The six named residuals of the Round 1 repair note are kept as named behaviour, none re-decided. The store side symlink refusal stands at the same points and under the same error. The reservation of the two generated file names stands on both the write side and the read side. Sequence directory matching past six digits stands. The refusal of a non regular memory document before any read stands in both its shapes. A sequence directory without a manifest stands as corruption that names the manifest, while sequence assignment keeps counting the standing directory. A directory in the state tree that cannot be listed stands as a failure naming that directory, staged through the seam named above.
+
+## Round 4 amendment, the database snapshot slice
+
+Amendment, recorded with Round 4 on 2026-11-05. The Round 1 amendment and the port
+amendment above are the earlier record, and the obligations WS-1 to WS-10 stand beside the
+obligations this amendment adds. One sentence of WS-10 is retired in the open by WS-19
+below, the sentence saying slice 1 does not snapshot database state, and the rest of WS-10
+stands. No probe preamble is written for this amendment, because the slice rests on the
+Round 1 probes for rename publication and lock exclusion and on byte comparisons its own
+pins perform, and on no other behaviour of a runtime.
+
+Obligation WS-11 covers database declaration. At checkpoint time a caller may declare
+database paths, each a relative path inside the state directory satisfying the recorded
+path rules of WS-5 and naming a regular file that stands in the state directory. A path
+declared twice, or a path that is the sidecar of another declared path, or a declared
+path naming a top level file named wayside.env or wayside.memory, is refused with a clean
+error before any byte is copied and before any sequence is assigned, and the store and
+the sequence stand exactly as they stood. This is covered by tests that declare valid
+paths and read the manifest back, and by tests for each refusal shape, a duplicate
+declaration, a sidecar declared beside its main file, a reserved name, and a path with a
+parent reference.
+
+Obligation WS-12 covers the bundle and the opacity of database bytes. The bundle of a
+declared path is the named file together with the file named by appending -wal and the
+file named by appending -journal, when each stands as a regular file, and no other file.
+The file named by appending -shm is never part of a bundle and is never recorded or
+restored as one. No operation of this slice opens a database file or reads its format,
+and a declared file of arbitrary bytes is captured, recorded, and restored exactly as a
+declared file carrying a database header is. A sidecar standing in the state tree whose
+main file is not declared is recorded as an ordinary file under WS-1. This is covered by
+tests that checkpoint bundles with and without each sidecar standing, by a test that a
+-shm file standing beside a declared database appears nowhere in the manifest or the
+restored tree, and by a test that declares a file of patterned bytes with no database
+structure and restores it byte for byte.
+
+Obligation WS-13 covers the consistency proof at capture. Capture reads and hashes every
+bundle member at the source, copies the members into the assembling checkpoint, and then
+reads and hashes every member at the source again and re-checks which of the three
+sidecar names stand. If any member's size or recorded hash differs between the two
+readings, or a member stands at one reading and not the other, or a sidecar stands at
+one reading and not the other, the checkpoint is refused with an error naming the
+database path, and nothing is published and no sequence is consumed. The hashes the
+manifest records are the hashes of the copied bytes. This is covered by tests that stage
+a member changing between the readings through the state tree reader seam and check the
+refusal and the untouched sequence, by tests that stage a sidecar appearing and a sidecar
+disappearing between the readings, and by a test that a still bundle publishes with
+manifest hashes equal to hashes computed from the source bytes.
+
+Obligation WS-14 covers the bundle size bound. The members of one bundle may not sum
+past 268435456 bytes. A bundle whose standing members sum past the bound is refused at
+declaration validation, and a bundle that grows past the bound during its copy is
+refused as the counted copy passes it, and in both cases the error names the bound and
+nothing is published. No bound is added to ordinary file payloads, which keep the rule
+of slice 1. This is covered by tests at the bound from both sides using sparse synthetic
+members, and by a test that stages growth during the copy through the reader seam.
+
+Obligation WS-15 covers the successor format. A checkpoint that declares at least one
+database is written as wayside-checkpoint/2 and a checkpoint that declares none is
+written as wayside-checkpoint/1, byte for byte as the landed writer writes it. The /2
+manifest carries the /1 field set in the /1 order with one added field, databases,
+standing between files and forked_from, and each database entry carries exactly the
+fields path and bundle_sha256 and members, and each member carries exactly the fields
+path and sha256 and size. Reading a /2 manifest refuses a repeated key at any level, a
+field set other than the recorded one at any level, a value of the wrong type, an empty
+databases array, a database or member path failing the rules of WS-5, member paths that
+are not the database path followed by its -wal and -journal appendages in that order, and
+any path recorded both as a database member and as an ordinary file, each as a corrupt
+checkpoint error. Reading a /1 manifest behaves exactly as it did before this slice. This
+is covered by tests that write both formats and read the manifests back field by field,
+by a battery that damages a /2 manifest in each named way, and by the landed /1 fixture
+stores standing readable and extendable in the same suite.
+
+Obligation WS-16 covers restore and fork of database payloads. Restore and rewind of a
+/2 checkpoint verify the hash and size of every database member before placing any byte,
+under the rule of WS-2, and place the members at their recorded paths in the target under
+the discipline of WS-7. Fork of a /2 checkpoint verifies the source first under WS-8 and
+produces a /2 checkpoint whose database entries and bundle digests equal the source's.
+This is covered by tests that flip one byte in a stored database member and check that
+restore fails and the target stands as it was found, by tests that restore a bundle and
+compare every placed byte against the source tree, and by a test that forks a /2
+checkpoint and compares the digests and the restored trees of both sessions.
+
+Obligation WS-17 covers verify. A verify operation names a session and a sequence and
+reads the manifest strictly and re-reads and re-hashes every recorded payload, the files
+and the memory document and every database member, and reports the checkpoint clean, or
+fails with a corrupt checkpoint error naming the first payload whose bytes mismatch
+their recorded hash and size. Verify writes nothing and creates nothing. This is covered
+by tests that verify a clean checkpoint of each format, and by tests that damage a file
+payload and a database member in the store and check that verify names the damaged
+payload, and by a test that the store tree stands byte for byte unchanged after verify
+runs.
+
+Obligation WS-18 covers compare. A compare operation names a session and two sequences
+and reads both manifests strictly and reads no payload bytes, and for every database path
+recorded on either side it reports equal where both sides record the same bundle digest
+for the path, and different where both record it with different digests, and recorded on
+one side only where only one does, naming the side. A comparison where neither side
+records any database reports no databases. Compare fails only where a manifest cannot be
+read. This is covered by tests across two checkpoints whose bundles are byte identical
+and byte different, by a test comparing a /1 checkpoint against a /2 checkpoint, and by a
+test that compare runs against a store whose payloads were damaged after recording and
+still reports the recorded digests, proving it read none of them.
+
+Obligation WS-19 covers the limits of this slice, and it fails if any public copy in
+this repo claims past them. This slice retires the WS-10 sentence that slice 1 does not
+snapshot database state, and that retirement is recorded here rather than made by drift,
+with the rest of WS-10 standing. The slice snapshots only declared file bundles inside a
+state directory. It snapshots no database reached through a connection, no file outside
+the state directory, and no state that lives only inside a running process, and it builds
+no dump or load tooling. Its consistency proof shows a bundle sat still across one copy
+by two readings that bracket the copy, and it does not freeze the database or lock its
+writer, and a writer that restores a member's exact bytes inside the window is
+indistinguishable from stillness. The slice adds no compression and no encryption and no
+cross-machine sync and no daemon and no watcher, and it is not wired into the mayfly or
+switchyard runtimes. Every failure this slice names is a typed error with a stable
+message and a nonzero exit from the command line, and the command line prints no
+traceback for any of them. This is covered by inspection of the README and the repo annex
+in AGENTS.md against this contract before any push, and by the error shape tests across
+the suite.
