@@ -20,11 +20,13 @@ from ._wayside import (
     TargetError,
     WaysideError,
     checkpoint,
+    compare,
     fork,
     list,
     restore,
     rewind,
     show,
+    verify,
 )
 
 __all__ = [
@@ -35,11 +37,13 @@ __all__ = [
     "TargetError",
     "WaysideError",
     "checkpoint",
+    "compare",
     "fork",
     "list",
     "restore",
     "rewind",
     "show",
+    "verify",
 ]
 
 __version__ = "0.1.0"

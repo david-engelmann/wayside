@@ -22,7 +22,7 @@ use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict};
 
-use wayside_core::{CheckpointInfo, Error, Manifest};
+use wayside_core::{CheckpointInfo, Comparison, DatabaseStanding, Error, Manifest};
 
 create_exception!(wayside, WaysideError, pyo3::exceptions::PyException);
 create_exception!(wayside, RefusalError, WaysideError);
@@ -64,7 +64,9 @@ fn sequence_argument(value: &Bound<'_, PyAny>, name: &str) -> PyResult<i64> {
 
 /// Translate one validated manifest into a plain dictionary
 /// carrying every field the manifest carries, in the shape of
-/// the wayside-checkpoint/1 format itself.
+/// the wayside-checkpoint formats themselves. The databases
+/// list stands empty for a wayside-checkpoint/1 manifest, as
+/// the forked_from entry stands empty for an unforked one.
 fn manifest_dict(py: Python<'_>, manifest: &Manifest) -> PyResult<Py<PyDict>> {
     let dict = PyDict::new(py);
     dict.set_item("format", &manifest.format)?;
@@ -89,6 +91,23 @@ fn manifest_dict(py: Python<'_>, manifest: &Manifest) -> PyResult<Py<PyDict>> {
         files.push(file.unbind());
     }
     dict.set_item("files", files)?;
+    let mut databases = Vec::new();
+    for entry in &manifest.databases {
+        let database = PyDict::new(py);
+        database.set_item("path", &entry.path)?;
+        database.set_item("bundle_sha256", &entry.bundle_sha256)?;
+        let mut members = Vec::new();
+        for member in &entry.members {
+            let member_dict = PyDict::new(py);
+            member_dict.set_item("path", &member.path)?;
+            member_dict.set_item("sha256", &member.sha256)?;
+            member_dict.set_item("size", member.size)?;
+            members.push(member_dict.unbind());
+        }
+        database.set_item("members", members)?;
+        databases.push(database.unbind());
+    }
+    dict.set_item("databases", databases)?;
     let forked_from = match &manifest.forked_from {
         Some(lineage) => {
             let fork = PyDict::new(py);
@@ -116,9 +135,11 @@ fn info_dict(py: Python<'_>, info: &CheckpointInfo) -> PyResult<Py<PyDict>> {
 ///
 /// The env argument is a mapping of declared env pairs and
 /// defaults to no pairs. The memory argument is the memory
-/// document as bytes and defaults to an empty document.
+/// document as bytes and defaults to an empty document. The
+/// databases argument is a list of database paths declared
+/// inside the state directory and defaults to no declarations.
 #[pyfunction]
-#[pyo3(signature = (store, session, state, env = None, memory = None))]
+#[pyo3(signature = (store, session, state, env = None, memory = None, databases = None))]
 fn checkpoint(
     py: Python<'_>,
     store: PathBuf,
@@ -126,10 +147,21 @@ fn checkpoint(
     state: PathBuf,
     env: Option<BTreeMap<String, String>>,
     memory: Option<Vec<u8>>,
+    databases: Option<Vec<String>>,
 ) -> PyResult<Py<PyDict>> {
     let memory = memory.unwrap_or_default();
+    let databases = databases.unwrap_or_default();
     let manifest = py
-        .detach(|| wayside_core::checkpoint(&store, session, &state, env.as_ref(), &memory))
+        .detach(|| {
+            wayside_core::checkpoint_with_databases(
+                &store,
+                session,
+                &state,
+                env.as_ref(),
+                &memory,
+                &databases,
+            )
+        })
         .map_err(to_py_error)?;
     manifest_dict(py, &manifest)
 }
@@ -210,6 +242,69 @@ fn show(
     manifest_dict(py, &manifest)
 }
 
+/// Translate one comparison into a plain dictionary carrying
+/// the session, the two sequences in the order they were
+/// named, and one entry per database path recorded on either
+/// side, each entry carrying the path and its standing as one
+/// of the words equal, different, only_first, and only_second.
+fn comparison_dict(py: Python<'_>, comparison: &Comparison) -> PyResult<Py<PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("session", &comparison.session)?;
+    dict.set_item("first", comparison.first)?;
+    dict.set_item("second", comparison.second)?;
+    let mut databases = Vec::new();
+    for entry in &comparison.databases {
+        let database = PyDict::new(py);
+        database.set_item("path", &entry.path)?;
+        database.set_item(
+            "standing",
+            match entry.standing {
+                DatabaseStanding::Equal => "equal",
+                DatabaseStanding::Different => "different",
+                DatabaseStanding::OnlyFirst => "only_first",
+                DatabaseStanding::OnlySecond => "only_second",
+            },
+        )?;
+        databases.push(database.unbind());
+    }
+    dict.set_item("databases", databases)?;
+    Ok(dict.unbind())
+}
+
+/// Verify one checkpoint against its recorded hashes and
+/// return its manifest when every payload matches.
+#[pyfunction]
+fn verify(
+    py: Python<'_>,
+    store: PathBuf,
+    session: &str,
+    sequence: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyDict>> {
+    let sequence = sequence_argument(sequence, "sequence")?;
+    let manifest = py
+        .detach(|| wayside_core::verify_checkpoint(&store, session, sequence))
+        .map_err(to_py_error)?;
+    manifest_dict(py, &manifest)
+}
+
+/// Compare the recorded databases of two checkpoints of one
+/// session and return the comparison as a plain dictionary.
+#[pyfunction]
+fn compare(
+    py: Python<'_>,
+    store: PathBuf,
+    session: &str,
+    first: &Bound<'_, PyAny>,
+    second: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyDict>> {
+    let first = sequence_argument(first, "first")?;
+    let second = sequence_argument(second, "second")?;
+    let comparison = py
+        .detach(|| wayside_core::compare_checkpoints(&store, session, first, second))
+        .map_err(to_py_error)?;
+    comparison_dict(py, &comparison)
+}
+
 #[pymodule]
 fn _wayside(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("WaysideError", m.py().get_type::<WaysideError>())?;
@@ -224,5 +319,7 @@ fn _wayside(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fork, m)?)?;
     m.add_function(wrap_pyfunction!(list_checkpoints, m)?)?;
     m.add_function(wrap_pyfunction!(show, m)?)?;
+    m.add_function(wrap_pyfunction!(verify, m)?)?;
+    m.add_function(wrap_pyfunction!(compare, m)?)?;
     Ok(())
 }
