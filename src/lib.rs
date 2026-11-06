@@ -701,7 +701,6 @@ fn validate_databases(
             });
         }
         database_paths.push(rel.clone());
-        recorded_paths.push(rel.clone());
         for member in &members {
             recorded_paths.push(member.path.clone());
         }
@@ -2121,14 +2120,14 @@ fn read_bundle_pass(
 /// Whether two readings of one bundle agree: the same members
 /// in the same order, each with the same size and the same
 /// hash (WS-13).
-fn readings_agree(
-    first: &[(String, Vec<u8>)],
-    second: &[(String, Vec<u8>)],
-) -> bool {
+fn readings_agree(first: &[(String, Vec<u8>)], second: &[(String, Vec<u8>)]) -> bool {
     first.len() == second.len()
-        && first.iter().zip(second.iter()).all(|((rel_a, a), (rel_b, b))| {
-            rel_a == rel_b && a.len() == b.len() && sha256_hex(a) == sha256_hex(b)
-        })
+        && first
+            .iter()
+            .zip(second.iter())
+            .all(|((rel_a, a), (rel_b, b))| {
+                rel_a == rel_b && a.len() == b.len() && sha256_hex(a) == sha256_hex(b)
+            })
 }
 
 /// Record a new checkpoint of the session from the state
@@ -2272,19 +2271,14 @@ fn checkpoint_inner(
     // Recording is single: bundle member paths leave the file
     // list and the member bytes ride in the payload set once,
     // and the -shm companion of a declared database is left
-    // out of the recording entirely.
-    let file_entries: Vec<(String, Vec<u8>)> = walked
-        .iter()
+    // out of the recording entirely. The manifest is built
+    // from the payload set before the member bytes join it,
+    // so the file list and the payload set share one copy of
+    // the walked bytes.
+    let mut payloads: Vec<(String, Vec<u8>)> = walked
+        .into_iter()
         .filter(|(rel, _)| !member_paths.contains(rel) && !shm_paths.contains(rel))
-        .cloned()
         .collect();
-    let mut payloads = file_entries.clone();
-    for (_, members) in &bundles {
-        for (member_rel, data) in members {
-            payloads.push((member_rel.clone(), data.clone()));
-        }
-    }
-    payloads.sort_by(|a, b| a.0.cmp(&b.0));
     let ck_dir = checkpoints_dir(store, session);
     fs::create_dir_all(&ck_dir).map_err(|exc| {
         Error::wayside(format!(
@@ -2326,14 +2320,14 @@ fn checkpoint_inner(
         })
         .collect();
     let manifest = new_manifest(
-        session,
-        sequence,
-        &env_map,
-        &file_entries,
-        databases,
-        memory,
-        None,
+        session, sequence, &env_map, &payloads, databases, memory, None,
     );
+    for (_, members) in &bundles {
+        for (member_rel, data) in members {
+            payloads.push((member_rel.clone(), data.clone()));
+        }
+    }
+    payloads.sort_by(|a, b| a.0.cmp(&b.0));
     publish(store, session, sequence, &manifest, &payloads, memory)?;
     Ok(manifest)
 }
