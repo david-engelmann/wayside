@@ -128,6 +128,83 @@ def test_refusals_raise_with_the_command_line_messages(tmp_path):
         wayside.show(store, "alpha", 1)
 
 
+def test_the_database_lifecycle_through_the_binding(tmp_path):
+    import hashlib
+
+    store = str(tmp_path / "store")
+    state = tmp_path / "state"
+    data = state / "data"
+    data.mkdir(parents=True)
+    main_bytes = b"binding database main bytes"
+    wal_bytes = b"binding wal bytes"
+    (data / "app.db").write_bytes(main_bytes)
+    (data / "app.db-wal").write_bytes(wal_bytes)
+
+    first = wayside.checkpoint(
+        store, "alpha", str(state), databases=["data/app.db"]
+    )
+    assert first["format"] == "wayside-checkpoint/2"
+    assert first["files"] == []
+    (database,) = first["databases"]
+    assert database["path"] == "data/app.db"
+    assert database["bundle_sha256"] == hashlib.sha256(
+        main_bytes + wal_bytes
+    ).hexdigest()
+    members = database["members"]
+    assert [member["path"] for member in members] == [
+        "data/app.db",
+        "data/app.db-wal",
+    ]
+    assert members[0]["sha256"] == hashlib.sha256(main_bytes).hexdigest()
+    assert members[0]["size"] == len(main_bytes)
+    assert members[1]["sha256"] == hashlib.sha256(wal_bytes).hexdigest()
+
+    verified = wayside.verify(store, "alpha", 1)
+    assert verified == first
+
+    second = wayside.checkpoint(store, "alpha", str(state), databases=["data/app.db"])
+    compared = wayside.compare(store, "alpha", 1, 2)
+    assert compared == {
+        "session": "alpha",
+        "first": 1,
+        "second": 2,
+        "databases": [{"path": "data/app.db", "standing": "equal"}],
+    }
+
+    (data / "app.db-wal").write_bytes(b"binding wal bytes, changed")
+    wayside.checkpoint(store, "alpha", str(state), databases=["data/app.db"])
+    changed = wayside.compare(store, "alpha", 2, 3)
+    assert changed["databases"] == [
+        {"path": "data/app.db", "standing": "different"}
+    ]
+
+    plain = wayside.checkpoint(store, "alpha", str(state))
+    assert plain["format"] == "wayside-checkpoint/1"
+    assert plain["databases"] == []
+    one_side = wayside.compare(store, "alpha", 4, 3)
+    assert one_side["databases"] == [
+        {"path": "data/app.db", "standing": "only_second"}
+    ]
+
+    target = tmp_path / "restored"
+    wayside.restore(store, "alpha", 1, str(target))
+    assert (target / "data" / "app.db").read_bytes() == main_bytes
+    assert (target / "data" / "app.db-wal").read_bytes() == wal_bytes
+
+    forked = wayside.fork(store, "alpha", 1, "beta")
+    assert forked["format"] == "wayside-checkpoint/2"
+    assert forked["databases"] == first["databases"]
+
+    with pytest.raises(wayside.RefusalError) as refused:
+        wayside.checkpoint(
+            store,
+            "alpha",
+            str(state),
+            databases=["data/app.db", "data/app.db"],
+        )
+    assert str(refused.value) == "the database path data/app.db is declared twice"
+
+
 def test_sequence_refuses_booleans(tmp_path):
     store = str(tmp_path / "store")
     state = tmp_path / "state"

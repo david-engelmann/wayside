@@ -16,23 +16,34 @@ use std::process::ExitCode;
 
 use wayside::Error;
 
-const MAIN_USAGE: &str = "usage: wayside [-h] --store STORE\n               {checkpoint,restore,rewind,fork,list,show} ...";
-const COMMANDS: [&str; 6] = ["checkpoint", "restore", "rewind", "fork", "list", "show"];
+const MAIN_USAGE: &str = "usage: wayside [-h] --store STORE\n               {checkpoint,restore,rewind,fork,list,show,verify,compare} ...";
+const COMMANDS: [&str; 8] = [
+    "checkpoint",
+    "restore",
+    "rewind",
+    "fork",
+    "list",
+    "show",
+    "verify",
+    "compare",
+];
 
 const MAIN_HELP: &str = "usage: wayside [-h] --store STORE
-               {checkpoint,restore,rewind,fork,list,show} ...
+               {checkpoint,restore,rewind,fork,list,show,verify,compare} ...
 
 Checkpoint the working state of an agent session so it can be resumed, forked,
 or rewound after the process is gone.
 
 positional arguments:
-  {checkpoint,restore,rewind,fork,list,show}
+  {checkpoint,restore,rewind,fork,list,show,verify,compare}
     checkpoint          record a new checkpoint of a session
     restore             materialize one checkpoint into a target directory
     rewind              restore a checkpoint earlier than the newest one
     fork                start a new session from a named checkpoint
     list                list the checkpoints of a session
     show                print the manifest of one checkpoint
+    verify              verify one checkpoint against its recorded hashes
+    compare             compare the recorded databases of two checkpoints
 
 options:
   -h, --help            show this help message and exit
@@ -42,12 +53,14 @@ options:
 fn sub_usage(command: &str) -> &'static str {
     match command {
         "checkpoint" => {
-            "usage: wayside checkpoint [-h] --state STATE [--memory MEMORY]\n                          [--env KEY=VALUE]\n                          session"
+            "usage: wayside checkpoint [-h] --state STATE [--memory MEMORY]\n                          [--env KEY=VALUE] [--database PATH]\n                          session"
         }
         "restore" => "usage: wayside restore [-h] --target TARGET session sequence",
         "rewind" => "usage: wayside rewind [-h] --target TARGET session sequence",
         "fork" => "usage: wayside fork [-h] session sequence new_session",
         "list" => "usage: wayside list [-h] session",
+        "verify" => "usage: wayside verify [-h] session sequence",
+        "compare" => "usage: wayside compare [-h] session first second",
         _ => "usage: wayside show [-h] session sequence",
     }
 }
@@ -55,7 +68,13 @@ fn sub_usage(command: &str) -> &'static str {
 fn sub_help(command: &str) -> String {
     let body = match command {
         "checkpoint" => {
-            "positional arguments:\n  session\n\noptions:\n  -h, --help       show this help message and exit\n  --state STATE    the state directory to record\n  --memory MEMORY  a file holding the memory document to record, empty when\n                   omitted\n  --env KEY=VALUE  an env pair to declare, repeatable"
+            "positional arguments:\n  session\n\noptions:\n  -h, --help       show this help message and exit\n  --state STATE    the state directory to record\n  --memory MEMORY  a file holding the memory document to record, empty when\n                   omitted\n  --env KEY=VALUE  an env pair to declare, repeatable\n  --database PATH  declare a database bundle rooted at PATH inside the\n                   state directory, captured with its standing -wal and\n                   -journal companions, repeatable"
+        }
+        "verify" => {
+            "positional arguments:\n  session\n  sequence\n\noptions:\n  -h, --help   show this help message and exit"
+        }
+        "compare" => {
+            "positional arguments:\n  session\n  first\n  second\n\noptions:\n  -h, --help   show this help message and exit"
         }
         "restore" => {
             "positional arguments:\n  session\n  sequence\n\noptions:\n  -h, --help       show this help message and exit\n  --target TARGET"
@@ -449,16 +468,22 @@ fn dispatch(argv: &[String]) -> Result<ExitCode, Error> {
             MAIN_USAGE,
             "wayside",
             &format!(
-                "argument command: invalid choice: {} (choose from 'checkpoint', 'restore', 'rewind', 'fork', 'list', 'show')",
+                "argument command: invalid choice: {} (choose from 'checkpoint', 'restore', 'rewind', 'fork', 'list', 'show', 'verify', 'compare')",
                 wayside::py_repr(&command)
             ),
         ));
     }
     let parsed = match command.as_str() {
-        "checkpoint" => parse_sub(&command, &rest, &["--state", "--memory", "--env"], 1),
+        "checkpoint" => parse_sub(
+            &command,
+            &rest,
+            &["--state", "--memory", "--env", "--database"],
+            1,
+        ),
         "restore" | "rewind" => parse_sub(&command, &rest, &["--target"], 2),
         "fork" => parse_sub(&command, &rest, &[], 3),
         "list" => parse_sub(&command, &rest, &[], 1),
+        "compare" => parse_sub(&command, &rest, &[], 3),
         _ => parse_sub(&command, &rest, &[], 2),
     };
     let args = match parsed {
@@ -477,6 +502,7 @@ fn dispatch(argv: &[String]) -> Result<ExitCode, Error> {
             &[],
         ),
         "list" => require(&command, &args, &["session"], &[]),
+        "compare" => require(&command, &args, &["session", "first", "second"], &[]),
         _ => require(&command, &args, &["session", "sequence"], &[]),
     };
     if let Err(failure) = required {
@@ -510,8 +536,20 @@ fn dispatch(argv: &[String]) -> Result<ExitCode, Error> {
             let env = parse_env(&pairs)?;
             let memory = read_memory(option_value(&args, "--memory"))?;
             let state = option_value(&args, "--state").unwrap();
-            let manifest =
-                wayside::checkpoint(&store, &session, Path::new(state), Some(&env), &memory)?;
+            let databases: Vec<String> = args
+                .options
+                .iter()
+                .filter(|(name, _)| name == "--database")
+                .map(|(_, value)| value.clone())
+                .collect();
+            let manifest = wayside::checkpoint_with_databases(
+                &store,
+                &session,
+                Path::new(state),
+                Some(&env),
+                &memory,
+                &databases,
+            )?;
             println!(
                 "session {} checkpoint {}",
                 manifest.session, manifest.sequence
@@ -541,6 +579,32 @@ fn dispatch(argv: &[String]) -> Result<ExitCode, Error> {
         "list" => {
             for entry in wayside::list_checkpoints(&store, &session)? {
                 println!("{} {}", entry.sequence, entry.created_at);
+            }
+        }
+        "verify" => {
+            let sequence = sequence_arg(&args.positionals[1])?;
+            wayside::verify_checkpoint(&store, &session, sequence)?;
+            println!("verified session {session} checkpoint {sequence}");
+        }
+        "compare" => {
+            let first = sequence_arg(&args.positionals[1])?;
+            let second = sequence_arg(&args.positionals[2])?;
+            let comparison = wayside::compare_checkpoints(&store, &session, first, second)?;
+            for entry in &comparison.databases {
+                match entry.standing {
+                    wayside::DatabaseStanding::Equal => {
+                        println!("{} equal", entry.path)
+                    }
+                    wayside::DatabaseStanding::Different => {
+                        println!("{} different", entry.path)
+                    }
+                    wayside::DatabaseStanding::OnlyFirst => {
+                        println!("{} recorded on checkpoint {first} only", entry.path)
+                    }
+                    wayside::DatabaseStanding::OnlySecond => {
+                        println!("{} recorded on checkpoint {second} only", entry.path)
+                    }
+                }
             }
         }
         _ => {

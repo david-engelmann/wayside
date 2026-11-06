@@ -404,3 +404,168 @@ Expected list output for session alpha:
 One reading note for the port: the empty file and the empty memory
 document share the empty input SHA-256 e3b0c442...b7852b855, which is
 the published empty vector the Round 1 contract preamble records.
+
+## Fixture 6, database-snapshot
+
+This fixture differs from fixtures 1 to 5 in its producer. Those
+were written by the Python implementation. This store was written
+by this repo's own Rust command line in Round 4, because it freezes
+the wayside-checkpoint/2 format this slice introduces and no Python
+writer of /2 exists. It stands beside the five Python stores as the
+fixed record a later reader change must keep reading, under the
+fixture plan of the Round 4 design. All content is synthetic.
+
+Production calls. The producer drove the slice's command line over
+a state tree holding a.txt and data/app.db with its -wal standing,
+no declared env and the default empty memory document, three
+times, changing the state between the calls.
+
+    wayside --store <store> checkpoint alpha --state <state>
+    wayside --store <store> checkpoint alpha --state <state> --database data/app.db
+    wayside --store <store> checkpoint alpha --state <state> --database data/app.db
+
+State one holds a.txt with the bytes "state one", data/app.db with
+the 41 bytes "synthetic fixture database, first writing", and
+data/app.db-wal with the 36 bytes "synthetic fixture wal, first
+writing", and no -journal. The first checkpoint declares no
+database, so data/app.db and its -wal ride as ordinary files and
+the manifest names wayside-checkpoint/1.
+
+State two changes a.txt to the bytes "state two" and the -wal to
+the 37 bytes "synthetic fixture wal, second writing". The second
+checkpoint declares data/app.db, so the bundle stands as the main
+file and the -wal, and the manifest names wayside-checkpoint/2.
+
+State three keeps state two's bytes and adds data/app.db-journal
+with the 25 bytes "synthetic fixture journal" standing. The third
+checkpoint declares data/app.db, so the bundle gains the -journal
+as its third member.
+
+The manifests stand at sessions/alpha/checkpoints/000001, 000002,
+and 000003 in the frozen store and read as follows.
+
+```json
+{
+  "created_at": "2026-11-06T00:19:58.144046+00:00",
+  "env": {},
+  "files": [
+    {
+      "path": "a.txt",
+      "sha256": "8153519c8c3150762a521eae90636d0eb29e2846fd297e4e16e50e7418fe040e",
+      "size": 9
+    },
+    {
+      "path": "data/app.db",
+      "sha256": "1beb6ddc16fb40980436ed04113ede1f54eeb4e8a48553e748025c984747131d",
+      "size": 41
+    },
+    {
+      "path": "data/app.db-wal",
+      "sha256": "3b5dd25f9948a06f73d9c3af1403c4b691a3b71254122d79672e7ad2f080ee16",
+      "size": 36
+    }
+  ],
+  "format": "wayside-checkpoint/1",
+  "memory": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "sequence": 1,
+  "session": "alpha"
+}
+```
+
+```json
+{
+  "created_at": "2026-11-06T00:19:58.154411+00:00",
+  "databases": [
+    {
+      "bundle_sha256": "9c98acb831be66cd76f3614b54389caf0833c734dc425a6a7c91362b551e8322",
+      "members": [
+        {
+          "path": "data/app.db",
+          "sha256": "1beb6ddc16fb40980436ed04113ede1f54eeb4e8a48553e748025c984747131d",
+          "size": 41
+        },
+        {
+          "path": "data/app.db-wal",
+          "sha256": "c3238385fce454885f048d2c5cc1ca715861825a1bb823105cc9fc908f78333a",
+          "size": 37
+        }
+      ],
+      "path": "data/app.db"
+    }
+  ],
+  "env": {},
+  "files": [
+    {
+      "path": "a.txt",
+      "sha256": "c58d35305fec5ef220b661b306070da1d44051fee0171261516885bac9335bcf",
+      "size": 9
+    }
+  ],
+  "format": "wayside-checkpoint/2",
+  "memory": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "sequence": 2,
+  "session": "alpha"
+}
+```
+
+```json
+{
+  "created_at": "2026-11-06T00:19:58.161875+00:00",
+  "databases": [
+    {
+      "bundle_sha256": "1a4da6be4a8d134d0f2111148a83961a8c834d16e6c98c0e91794c8aea189353",
+      "members": [
+        {
+          "path": "data/app.db",
+          "sha256": "1beb6ddc16fb40980436ed04113ede1f54eeb4e8a48553e748025c984747131d",
+          "size": 41
+        },
+        {
+          "path": "data/app.db-wal",
+          "sha256": "c3238385fce454885f048d2c5cc1ca715861825a1bb823105cc9fc908f78333a",
+          "size": 37
+        },
+        {
+          "path": "data/app.db-journal",
+          "sha256": "f21f9310dca654fb45b50e42dade10baaf980bcb949473898ad37264d4422d9d",
+          "size": 25
+        }
+      ],
+      "path": "data/app.db"
+    }
+  ],
+  "env": {},
+  "files": [
+    {
+      "path": "a.txt",
+      "sha256": "c58d35305fec5ef220b661b306070da1d44051fee0171261516885bac9335bcf",
+      "size": 9
+    }
+  ],
+  "format": "wayside-checkpoint/2",
+  "memory": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "sequence": 3,
+  "session": "alpha"
+}
+```
+
+Recorded truth beyond the standing shape stands in three more
+files. expected-verify-alpha-N.txt holds the verify output for
+each checkpoint, the words "verified session alpha checkpoint N".
+expected-compare-1-2.txt holds the compare output for checkpoints
+1 and 2, the words "data/app.db recorded on checkpoint 2 only".
+expected-compare-2-3.txt holds "data/app.db different", because
+the third bundle adds the -journal member. expected-compare-1-1.txt
+is empty, because a /1 checkpoint records no databases.
+expected-restore/alpha-2/ is the tree the restore of checkpoint 2
+materialized, bundle members included.
+
