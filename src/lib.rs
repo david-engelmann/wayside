@@ -653,8 +653,10 @@ fn validate_databases(
                 &format!("the database at {rel} carries no members"),
             ));
         }
+        let bundle_slots = [rel.clone(), format!("{rel}-wal"), format!("{rel}-journal")];
+        let mut next_slot = 0usize;
         let mut members = Vec::new();
-        for (index, member) in member_values.iter().enumerate() {
+        for member in member_values.iter() {
             let member_pairs = match member {
                 StrictValue::Object(pairs)
                     if pairs.len() == 3
@@ -674,12 +676,24 @@ fn validate_databases(
             };
             let member_rel =
                 validate_recorded_path(object_get(member_pairs, "path").unwrap(), path)?;
-            let expected = match index {
-                0 => rel.clone(),
-                1 => format!("{rel}-wal"),
-                _ => format!("{rel}-journal"),
+            // The members stand in bundle order, the database path
+            // first, then its -wal, then its -journal, and a
+            // companion that does not stand is simply absent, so the
+            // recorded members are an ordered subsequence of the
+            // three slots (WS-15). A member is in order when it
+            // names a slot the earlier members have not passed, and
+            // the first member must take the first slot.
+            let in_order = match bundle_slots[next_slot..]
+                .iter()
+                .position(|slot| slot == &member_rel)
+            {
+                Some(offset) if !members.is_empty() || offset == 0 => {
+                    next_slot += offset + 1;
+                    true
+                }
+                _ => false,
             };
-            if member_rel != expected {
+            if !in_order {
                 return Err(corrupt(
                     path,
                     &format!(

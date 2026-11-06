@@ -486,6 +486,36 @@ fn bundle_with_each_companion_alone() {
 }
 
 #[test]
+fn journal_only_bundle_reads_back_through_show_verify_and_restore() {
+    let base = temp_dir("bundle-journal-only");
+    let store = base.join("store");
+    let state = make_state(
+        &base.join("state"),
+        &[
+            ("app.db", b"main bytes"),
+            ("app.db-journal", b"journal bytes"),
+        ],
+    );
+    let manifest = db_checkpoint(&store, "alpha", &state, &["app.db"]).unwrap();
+    let member_paths: Vec<&str> = manifest.databases[0]
+        .members
+        .iter()
+        .map(|member| member.path.as_str())
+        .collect();
+    assert_eq!(member_paths, ["app.db", "app.db-journal"]);
+    assert_eq!(show(&store, "alpha", 1).unwrap(), manifest);
+    verify_checkpoint(&store, "alpha", 1).unwrap();
+    let target = base.join("target");
+    restore(&store, "alpha", 1, &target).unwrap();
+    assert_eq!(std::fs::read(target.join("app.db")).unwrap(), b"main bytes");
+    assert_eq!(
+        std::fs::read(target.join("app.db-journal")).unwrap(),
+        b"journal bytes"
+    );
+    assert!(!target.join("app.db-wal").exists());
+}
+
+#[test]
 fn shm_companion_appears_nowhere_in_the_recording() {
     let base = temp_dir("bundle-shm");
     let store = base.join("store");
