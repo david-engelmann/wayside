@@ -105,6 +105,11 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// together with the memory document bytes.
 type VerifiedPayloads = (Vec<(String, Vec<u8>)>, Vec<u8>);
 
+/// One captured database bundle: the declared path together
+/// with its member readings as relative path and bytes pairs
+/// in bundle order.
+type CapturedBundle = (String, Vec<(String, Vec<u8>)>);
+
 /// The directory listing the state tree walk reads through.
 type Lister = dyn Fn(&Path) -> io::Result<Vec<PathBuf>> + Send + Sync;
 
@@ -2256,7 +2261,7 @@ fn checkpoint_inner(
     // The two pass proof of WS-13, under the store lock: read
     // every bundle twice and refuse a bundle whose readings
     // disagree, before any sequence is assigned.
-    let mut bundles: Vec<(String, Vec<(String, Vec<u8>)>)> = Vec::new();
+    let mut bundles: Vec<CapturedBundle> = Vec::new();
     for rel in &declared {
         let first = read_bundle_pass(state_dir, rel, reader)?;
         let second = read_bundle_pass(state_dir, rel, reader)?;
