@@ -19,7 +19,7 @@
 //! mechanisms the port amendment in CONTRACT.md names the
 //! difference.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::io;
@@ -746,8 +746,9 @@ fn validate_databases(
     if recorded_sorted.len() != recorded_paths.len() {
         return Err(corrupt(path, "the database entries repeat a path"));
     }
+    let file_path_set: BTreeSet<&str> = file_paths.iter().map(String::as_str).collect();
     for recorded in &recorded_paths {
-        if file_paths.contains(recorded) {
+        if file_path_set.contains(recorded.as_str()) {
             return Err(corrupt(
                 path,
                 &format!(
@@ -2032,19 +2033,20 @@ fn validate_declarations(declared: &[String]) -> Result<Vec<String>> {
     for rel in declared {
         validate_declared_path(rel)?;
     }
-    for (index, rel) in declared.iter().enumerate() {
-        if declared[..index].contains(rel) {
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    for rel in declared {
+        if !seen.insert(rel.as_str()) {
             return Err(Error::wayside(format!(
                 "the database path {rel} is declared twice"
             )));
         }
     }
     for rel in declared {
-        for other in declared {
-            if rel != other
-                && (rel.as_str() == format!("{other}-wal")
-                    || rel.as_str() == format!("{other}-journal"))
-            {
+        let base = rel
+            .strip_suffix("-wal")
+            .or_else(|| rel.strip_suffix("-journal"));
+        if let Some(other) = base {
+            if seen.contains(other) {
                 return Err(Error::wayside(format!(
                     "the declared database path {rel} is the sidecar of \
                      the declared database path {other}, and a sidecar \
@@ -2073,15 +2075,6 @@ fn join_rel(base: &Path, rel: &str) -> PathBuf {
         path.push(part);
     }
     path
-}
-
-/// The bytes the tree walk read for one relative path, when
-/// the walk read that path.
-fn walked_bytes<'a>(entries: &'a [(String, Vec<u8>)], rel: &str) -> Option<&'a [u8]> {
-    entries
-        .iter()
-        .find(|(seen, _)| seen == rel)
-        .map(|(_, data)| data.as_slice())
 }
 
 /// The three names of one bundle, in bundle order: the main
@@ -2249,10 +2242,14 @@ fn checkpoint_inner(
     // each declared path must name a regular file the walk
     // read, and the standing members of each bundle must sum
     // within the bound, all before the lock is taken.
-    let mut member_paths: Vec<String> = Vec::new();
-    let mut shm_paths: Vec<String> = Vec::new();
+    let mut walked_index: BTreeMap<&str, &[u8]> = BTreeMap::new();
+    for (seen, data) in &walked {
+        walked_index.entry(seen.as_str()).or_insert(data.as_slice());
+    }
+    let mut member_paths: BTreeSet<String> = BTreeSet::new();
+    let mut shm_paths: BTreeSet<String> = BTreeSet::new();
     for rel in &declared {
-        if walked_bytes(&walked, rel).is_none() {
+        if !walked_index.contains_key(rel.as_str()) {
             return Err(Error::wayside(format!(
                 "the declared database path {rel} does not name a regular \
                  file standing in the state directory"
@@ -2260,15 +2257,15 @@ fn checkpoint_inner(
         }
         let mut total: u128 = 0;
         for name in bundle_names(rel) {
-            if let Some(data) = walked_bytes(&walked, &name) {
+            if let Some(data) = walked_index.get(name.as_str()) {
                 total += data.len() as u128;
-                member_paths.push(name);
+                member_paths.insert(name);
             }
         }
         if total > BUNDLE_BOUND as u128 {
             return Err(bound_error(rel));
         }
-        shm_paths.push(format!("{rel}-shm"));
+        shm_paths.insert(format!("{rel}-shm"));
     }
     let _lock = locked(store)?;
     check_session_links(store, session)?;
