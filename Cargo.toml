@@ -7,7 +7,7 @@ resolver = "2"
 name = "wayside"
 version = "0.1.0"
 edition = "2021"
-description = "Checkpointing for agent sessions that snapshots the working state of files, env, and agent memory, so any run can resume, fork, or rewind."
+description = "Checkpointing for agent sessions that snapshots the full working state of files, env, agent memory, and declared database bundles, so any run can resume, fork, or rewind."
 license = "MIT"
 
 [lib]
