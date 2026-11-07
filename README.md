@@ -87,11 +87,11 @@ The checkpoint is number 1 of the session named demo, and the restore materializ
 
 ## Usage
 
-Every command names the store first, with --store. The runs below share one store and one session named demo, and each output block is the output of the commands above it, captured as printed.
+Every command names the store first, with --store. Run the examples below in a separate empty directory from the quickstart. The runs below share one store and one session named demo, and each output block is the output of the commands above it, captured as printed.
 
 ### Record a checkpoint with a database bundle
 
-A database bundle is declared by the path of its main file inside the state directory. The bundle is that file together with the file named by appending -wal and the file named by appending -journal, when each stands. The file named by appending -shm is never part of a bundle and is never recorded. Capture reads and hashes every member, copies the members, and then reads and hashes every member again, and a bundle that moves between the two readings refuses the checkpoint and consumes no sequence.
+A database bundle is declared by the path of its main file inside the state directory. The bundle is that file together with the file named by appending -wal and the file named by appending -journal, when each stands. The file named by appending -shm is never part of a bundle and is never recorded. Capture reads and hashes every member, copies the members, and then reads and hashes every member again, and a bundle whose second reading differs from its first refuses the checkpoint and consumes no sequence. The capture takes no lock on the database files and freezes nothing, and a change a writer makes and undoes between the two readings is not detected.
 
 The state directory below carries a plan, a notes file, and a database with its -wal and -shm companions standing.
 
@@ -289,7 +289,7 @@ first plan
 
 ## Status
 
-Every operation works today from the command line and from the Python binding. A checkpoint records the files of a session state directory with declared env pairs and a memory document, and a checkpoint that declares database bundles inside the state directory records each bundle as opaque bytes under a two reading consistency proof that refuses a bundle which moves while it is copied. Restore, rewind, and fork verify every recorded payload against its recorded hash before placing a byte, verify re-reads a checkpoint without writing anything, and compare reports the standing of the databases of two checkpoints from their recorded digests alone.
+Every operation works today from the command line and from the Python binding. A checkpoint records the files of a session state directory with declared env pairs and a memory document, and a checkpoint that declares database bundles inside the state directory records each bundle as opaque bytes under a two reading consistency check that refuses a bundle whose second reading differs from its first. Restore, rewind, and fork verify every recorded payload against its recorded hash before placing a byte, verify re-reads a checkpoint without writing anything, and compare reports the standing of the databases of two checkpoints from their recorded digests alone.
 
 The limits are stated in the contract and hold in the code. One bundle's standing members may not sum past 268435456 bytes. A bundle's -shm companion is never recorded. Wayside snapshots no database reached through a connection, no file outside the state directory, and no state that lives only inside a running process. It builds no dump or load tooling, no compression, no encryption, and no cross-machine sync, and it runs no daemon and no watcher. A reader written against the wayside-checkpoint/1 format refuses a /2 manifest as corrupt before any byte is placed.
 
