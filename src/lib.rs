@@ -2107,6 +2107,7 @@ fn temporary_hex() -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn new_manifest(
     session: &str,
     sequence: i64,
