@@ -1934,10 +1934,7 @@ impl Default for StateTreeReader {
 /// that cannot be listed fails the read, naming that
 /// directory, instead of publishing a partial tree as if it
 /// were complete.
-fn read_state_tree(
-    state: &Path,
-    reader: &StateTreeReader,
-) -> Result<WalkedTree> {
+fn read_state_tree(state: &Path, reader: &StateTreeReader) -> Result<WalkedTree> {
     let mut entries = Vec::new();
     let mut dirs = Vec::new();
     read_state_dir(state, state, reader, &mut entries, &mut dirs)?;
