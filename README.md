@@ -293,11 +293,11 @@ Every operation works today from the command line and from the Python binding. A
 
 The limits are stated in the contract and hold in the code. One bundle's standing members may not sum past 268435456 bytes. A bundle's -shm companion is never recorded. Wayside snapshots no database reached through a connection, no file outside the state directory, and no state that lives only inside a running process. It builds no dump or load tooling, no compression, no encryption, and no cross-machine sync, and it runs no daemon and no watcher. A reader written against the wayside-checkpoint/1 format refuses a /2 manifest as corrupt before any byte is placed.
 
-The contract lives in CONTRACT.md. Obligations S1 to S5 stand as the setup record. Obligations WS-1 to WS-10 state the checkpoint store, and WS-11 to WS-19 state the database bundle slice.
+The contract lives in CONTRACT.md. Obligations S1 to S5 stand as the setup record. Obligations WS-1 to WS-10 state the checkpoint store, and WS-11 to WS-19 state the database bundle slice, and WS-20 to WS-24 state the empty directories amendment.
 
 The continuous integration workflow runs the full suite and the Python binding smoke on every push and pull request, and both checks are required on main.
 
-Closed perfection rounds are 3 of 100. A round counts only when a full cycle of work and audit and review and red team and approval has closed, and seeding and setup are not rounds.
+Closed perfection rounds are 4 of 100. A round counts only when a full cycle of work and audit and review and red team and approval has closed, and seeding and setup are not rounds.
 
 The remote seed was verified on 2026-11-02 against the staged seed, and its commit is a9bdc896322b1787d0719d6a76baaf1d91ef8860, a parentless commit holding exactly README.md and LICENSE and .gitignore.
 
