@@ -409,7 +409,9 @@ pub struct DatabaseEntry {
 
 /// A validated checkpoint manifest, in the shape of the
 /// wayside-checkpoint formats. The databases list stands empty
-/// for every wayside-checkpoint/1 document.
+/// for every wayside-checkpoint/1 document, and the directories
+/// list stands empty for every manifest that records no empty
+/// directory.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Manifest {
     pub format: String,
@@ -420,6 +422,7 @@ pub struct Manifest {
     pub memory: MemoryEntry,
     pub files: Vec<FileEntry>,
     pub databases: Vec<DatabaseEntry>,
+    pub directories: Vec<String>,
     pub forked_from: Option<ForkRef>,
 }
 
@@ -761,6 +764,88 @@ fn validate_databases(
     Ok(databases)
 }
 
+/// Validate the directories field of a wayside-checkpoint/2
+/// manifest under WS-21: a non empty list of recorded paths,
+/// each satisfying the recorded path rules and the reserved
+/// name refusal of validate_recorded_path, standing in path
+/// order with no path repeated, none of them a recorded file
+/// or member path, and none standing as a proper prefix of a
+/// recorded file or member path.
+fn validate_directories(
+    value: &StrictValue,
+    path: &Path,
+    file_paths: &[String],
+    databases: &[DatabaseEntry],
+) -> Result<Vec<String>> {
+    let items = match value {
+        StrictValue::Array(items) => items,
+        _ => return Err(corrupt(path, "the directories entry is not a list")),
+    };
+    if items.is_empty() {
+        return Err(corrupt(
+            path,
+            "the directories entry is empty, and a manifest that records \
+             directories names at least one",
+        ));
+    }
+    let mut directories = Vec::new();
+    for item in items {
+        directories.push(validate_recorded_path(item, path)?);
+    }
+    let mut sorted = directories.clone();
+    sorted.sort();
+    let mut deduped = directories.clone();
+    deduped.sort();
+    deduped.dedup();
+    if directories != sorted || deduped.len() != directories.len() {
+        return Err(corrupt(
+            path,
+            "the directory entries are not in path order or repeat a path",
+        ));
+    }
+    let member_paths: Vec<&str> = databases
+        .iter()
+        .flat_map(|database| database.members.iter().map(|member| member.path.as_str()))
+        .collect();
+    for directory in &directories {
+        if file_paths.iter().any(|file| file == directory) {
+            return Err(corrupt(
+                path,
+                &format!(
+                    "the path {directory} stands both in the files list and \
+                     in the directories list"
+                ),
+            ));
+        }
+        if member_paths.iter().any(|member| member == directory) {
+            return Err(corrupt(
+                path,
+                &format!(
+                    "the path {directory} stands both in a database entry \
+                     and in the directories list"
+                ),
+            ));
+        }
+        let prefix = format!("{directory}/");
+        if file_paths.iter().any(|file| file.starts_with(&prefix)) {
+            return Err(corrupt(
+                path,
+                &format!("the directory {directory} stands above a recorded file"),
+            ));
+        }
+        if member_paths
+            .iter()
+            .any(|member| member.starts_with(&prefix))
+        {
+            return Err(corrupt(
+                path,
+                &format!("the directory {directory} stands above a database member"),
+            ));
+        }
+    }
+    Ok(directories)
+}
+
 fn validate_manifest(
     data: &StrictValue,
     path: &Path,
@@ -781,9 +866,11 @@ fn validate_manifest(
         && entries.iter().all(|(key, _)| {
             MANIFEST_KEYS.contains(&key.as_str())
                 || key == "forked_from"
-                || (is_v2 && key == "databases")
+                || (is_v2 && (key == "databases" || key == "directories"))
         })
-        && (!is_v2 || object_get(entries, "databases").is_some());
+        && (!is_v2
+            || object_get(entries, "databases").is_some()
+            || object_get(entries, "directories").is_some());
     if !keys_sound {
         return Err(corrupt(path, "the field set is not the recorded one"));
     }
@@ -909,8 +996,18 @@ fn validate_manifest(
             "the file entries are not in path order or repeat a path",
         ));
     }
-    let databases = if is_v2 {
+    let databases = if is_v2 && object_get(entries, "databases").is_some() {
         validate_databases(object_get(entries, "databases").unwrap(), path, &seen)?
+    } else {
+        Vec::new()
+    };
+    let directories = if is_v2 && object_get(entries, "directories").is_some() {
+        validate_directories(
+            object_get(entries, "directories").unwrap(),
+            path,
+            &seen,
+            &databases,
+        )?
     } else {
         Vec::new()
     };
@@ -970,6 +1067,7 @@ fn validate_manifest(
         memory,
         files,
         databases,
+        directories,
         forked_from,
     })
 }
@@ -1143,6 +1241,25 @@ fn render_databases_array(databases: &[DatabaseEntry], level: usize, out: &mut S
     out.push(']');
 }
 
+fn render_directories_array(directories: &[String], level: usize, out: &mut String) {
+    if directories.is_empty() {
+        out.push_str("[]");
+        return;
+    }
+    out.push_str("[\n");
+    let count = directories.len();
+    for (index, directory) in directories.iter().enumerate() {
+        write_indent(out, level + 1);
+        escape_json_string(directory, out);
+        if index + 1 < count {
+            out.push(',');
+        }
+        out.push('\n');
+    }
+    write_indent(out, level);
+    out.push(']');
+}
+
 /// Render a manifest exactly as the Python implementation's
 /// sorted, two space indented json rendering renders it, with
 /// no trailing newline. The stored manifest file carries this
@@ -1150,7 +1267,8 @@ fn render_databases_array(databases: &[DatabaseEntry], level: usize, out: &mut S
 /// plus one newline, so the two are byte identical. A
 /// wayside-checkpoint/2 manifest renders by its own format
 /// value, with the databases field standing in the sorted key
-/// order the rendering keeps, after created_at.
+/// order the rendering keeps, after created_at, and the
+/// directories field after it when a directory is recorded.
 pub fn render_manifest(manifest: &Manifest) -> String {
     let mut out = String::new();
     out.push_str("{\n");
@@ -1162,12 +1280,23 @@ pub fn render_manifest(manifest: &Manifest) -> String {
     escape_json_string(&manifest.created_at, &mut field);
     fields.push(field);
 
-    if manifest.format == FORMAT_V2 {
+    if manifest.format == FORMAT_V2
+        && (!manifest.databases.is_empty() || manifest.directories.is_empty())
+    {
         let mut field = String::new();
         write_indent(&mut field, 1);
         escape_json_string("databases", &mut field);
         field.push_str(": ");
         render_databases_array(&manifest.databases, 1, &mut field);
+        fields.push(field);
+    }
+
+    if manifest.format == FORMAT_V2 && !manifest.directories.is_empty() {
+        let mut field = String::new();
+        write_indent(&mut field, 1);
+        escape_json_string("directories", &mut field);
+        field.push_str(": ");
+        render_directories_array(&manifest.directories, 1, &mut field);
         fields.push(field);
     }
 
@@ -1791,17 +1920,24 @@ impl Default for StateTreeReader {
 }
 
 /// Read every regular file under the state directory, sorted
-/// by path. Symbolic links and non regular files are refused,
-/// because a link can name bytes outside the state directory
-/// and a checkpoint records only what the caller can see in
-/// the tree itself. A directory that cannot be listed fails
-/// the read, naming that directory, instead of publishing a
-/// partial tree as if it were complete.
-fn read_state_tree(state: &Path, reader: &StateTreeReader) -> Result<Vec<(String, Vec<u8>)>> {
+/// by path, and return the directories standing in the tree,
+/// sorted by path, beside the files. Symbolic links and non
+/// regular files are refused, because a link can name bytes
+/// outside the state directory and a checkpoint records only
+/// what the caller can see in the tree itself. A directory
+/// that cannot be listed fails the read, naming that
+/// directory, instead of publishing a partial tree as if it
+/// were complete.
+fn read_state_tree(
+    state: &Path,
+    reader: &StateTreeReader,
+) -> Result<(Vec<(String, Vec<u8>)>, Vec<String>)> {
     let mut entries = Vec::new();
-    read_state_dir(state, state, reader, &mut entries)?;
+    let mut dirs = Vec::new();
+    read_state_dir(state, state, reader, &mut entries, &mut dirs)?;
     entries.sort_by(|a, b| a.0.cmp(&b.0));
-    Ok(entries)
+    dirs.sort();
+    Ok((entries, dirs))
 }
 
 fn read_state_dir(
@@ -1809,6 +1945,7 @@ fn read_state_dir(
     dir: &Path,
     reader: &StateTreeReader,
     entries: &mut Vec<(String, Vec<u8>)>,
+    dirs_out: &mut Vec<String>,
 ) -> Result<()> {
     let listed = reader.list(dir).map_err(|exc| {
         Error::wayside(format!(
@@ -1852,7 +1989,15 @@ fn read_state_dir(
                  which a checkpoint does not record"
             )));
         }
-        read_state_dir(state, path, reader, entries)?;
+        if !rel.contains('/') && RESERVED_TOP_LEVEL.contains(&rel.as_str()) {
+            return Err(Error::wayside(format!(
+                "the state directory holds a top level directory named {rel}, \
+                 which is a name restore writes, so a checkpoint does \
+                 not record it"
+            )));
+        }
+        dirs_out.push(rel);
+        read_state_dir(state, path, reader, entries, dirs_out)?;
     }
     for path in &files {
         let rel = rel_of(path);
@@ -1968,11 +2113,12 @@ fn new_manifest(
     env: &BTreeMap<String, String>,
     entries: &[(String, Vec<u8>)],
     databases: Vec<DatabaseEntry>,
+    directories: Vec<String>,
     memory: &[u8],
     forked_from: Option<ForkRef>,
 ) -> Manifest {
     Manifest {
-        format: if databases.is_empty() {
+        format: if databases.is_empty() && directories.is_empty() {
             FORMAT_NAME.to_string()
         } else {
             FORMAT_V2.to_string()
@@ -1994,6 +2140,7 @@ fn new_manifest(
             })
             .collect(),
         databases,
+        directories,
         forked_from,
     }
 }
@@ -2237,7 +2384,7 @@ fn checkpoint_inner(
             state_dir.display()
         )));
     }
-    let walked = read_state_tree(state_dir, reader)?;
+    let (walked, walked_directories) = read_state_tree(state_dir, reader)?;
     // Standing and bound validation against the walked list:
     // each declared path must name a regular file the walk
     // read, and the standing members of each bundle must sum
@@ -2295,6 +2442,21 @@ fn checkpoint_inner(
         .into_iter()
         .filter(|(rel, _)| !member_paths.contains(rel) && !shm_paths.contains(rel))
         .collect();
+    // The recorded directories of WS-20: a walked directory is
+    // recorded exactly when no recorded payload stands at or
+    // below it, and the recorded payloads are the file entries
+    // of the manifest and the members of its bundles, so the
+    // judgement runs on the payload set and the member set,
+    // with the -shm companions already out of both.
+    let recorded_directories: Vec<String> = walked_directories
+        .iter()
+        .filter(|directory| {
+            let prefix = format!("{directory}/");
+            !payloads.iter().any(|(rel, _)| rel.starts_with(&prefix))
+                && !member_paths.iter().any(|rel| rel.starts_with(&prefix))
+        })
+        .cloned()
+        .collect();
     let ck_dir = checkpoints_dir(store, session);
     fs::create_dir_all(&ck_dir).map_err(|exc| {
         Error::wayside(format!(
@@ -2336,7 +2498,14 @@ fn checkpoint_inner(
         })
         .collect();
     let manifest = new_manifest(
-        session, sequence, &env_map, &payloads, databases, memory, None,
+        session,
+        sequence,
+        &env_map,
+        &payloads,
+        databases,
+        recorded_directories,
+        memory,
+        None,
     );
     for (_, members) in &bundles {
         for (member_rel, data) in members {
@@ -2395,6 +2564,9 @@ fn place(
         }
         fs::write(target.join(MEMORY_FILE_NAME), memory)?;
         fs::write(target.join(ENV_FILE_NAME), env_text(&manifest.env))?;
+        for directory in &manifest.directories {
+            fs::create_dir_all(join_rel(target, directory))?;
+        }
         Ok(())
     })();
     placed.map_err(|exc| {
@@ -2488,6 +2660,7 @@ pub fn fork(
         memory: manifest.memory.clone(),
         files: manifest.files.clone(),
         databases: manifest.databases.clone(),
+        directories: manifest.directories.clone(),
         forked_from: Some(ForkRef {
             session: source_session.to_string(),
             sequence: sequence as i128,
