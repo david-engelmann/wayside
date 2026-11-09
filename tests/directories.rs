@@ -755,6 +755,10 @@ fn fixture_directories() {
         assert_eq!(format!("{}\n", render_manifest(manifest)), expected);
     }
     // The recorded restore trees stand against live restores.
+    // The directories of the alpha-3 tree stand in a listing
+    // file beside the tree, because git carries no empty
+    // directory and the tree's directories are exactly the
+    // empty ones this fixture exists to record.
     let base = temp_dir("fixture-restore");
     for sequence in [2, 3] {
         let target = base.join(format!("restored-{sequence}"));
@@ -763,7 +767,14 @@ fn fixture_directories() {
             .join("expected-restore")
             .join(format!("alpha-{sequence}"));
         assert_eq!(tree_files(&target), tree_files(&expected));
-        assert_eq!(tree_dirs(&target), tree_dirs(&expected));
+        if sequence == 3 {
+            let listing =
+                std::fs::read_to_string(fixture.join("expected-restore-alpha-3-dirs.txt")).unwrap();
+            let recorded: BTreeSet<String> = listing.lines().map(str::to_string).collect();
+            assert_eq!(tree_dirs(&target), recorded);
+        } else {
+            assert_eq!(tree_dirs(&target), tree_dirs(&expected));
+        }
     }
     // The frozen store grows: a copy takes a fourth checkpoint
     // carrying its own directories.

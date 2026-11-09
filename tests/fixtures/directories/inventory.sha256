@@ -1,4 +1,5 @@
 8ad8f16641fa5535a9794ee6ddbcbb82065f3f026389ae931237b86a25242080  expected-list-alpha.txt
+061b0db506a66451fb175b0751fd234eceb0c48e6b738cff83b51e3cb454bf66  expected-restore-alpha-3-dirs.txt
 1beb6ddc16fb40980436ed04113ede1f54eeb4e8a48553e748025c984747131d  expected-restore/alpha-2/data/app.db
 3b5dd25f9948a06f73d9c3af1403c4b691a3b71254122d79672e7ad2f080ee16  expected-restore/alpha-2/data/app.db-wal
 206169b704a6c4dbbddbf078201bf005fe6d4986e45a0e4069db9a726833d623  expected-restore/alpha-2/plan.txt
