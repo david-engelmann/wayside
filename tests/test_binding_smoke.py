@@ -221,3 +221,37 @@ def test_sequence_refuses_booleans(tmp_path):
 
     assert not (tmp_path / "target").exists()
     assert wayside.show(store, "alpha", 1)["sequence"] == 1
+
+
+def test_the_directories_lifecycle_through_the_binding(tmp_path):
+    store = str(tmp_path / "store")
+    state = tmp_path / "state"
+    state.mkdir(parents=True)
+    (state / "plan.txt").write_text("first plan")
+    (state / "spool").mkdir()
+    (state / "cache" / "deep").mkdir(parents=True)
+
+    first = wayside.checkpoint(store, "alpha", str(state))
+    assert first["format"] == "wayside-checkpoint/2"
+    assert first["directories"] == ["cache", "cache/deep", "spool"]
+    assert first["databases"] == []
+
+    shown = wayside.show(store, "alpha", 1)
+    assert shown == first
+
+    target = tmp_path / "restored"
+    restored = wayside.restore(store, "alpha", 1, str(target))
+    assert restored == first
+    assert (target / "spool").is_dir()
+    assert (target / "cache" / "deep").is_dir()
+    assert (target / "plan.txt").read_text() == "first plan"
+
+    forked = wayside.fork(store, "alpha", 1, "beta")
+    assert forked["directories"] == ["cache", "cache/deep", "spool"]
+
+    plain_state = tmp_path / "plain-state"
+    plain_state.mkdir()
+    (plain_state / "plan.txt").write_text("plain plan")
+    plain = wayside.checkpoint(store, "alpha", str(plain_state))
+    assert plain["format"] == "wayside-checkpoint/1"
+    assert plain["directories"] == []
