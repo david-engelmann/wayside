@@ -569,3 +569,153 @@ is empty, because a /1 checkpoint records no databases.
 expected-restore/alpha-2/ is the tree the restore of checkpoint 2
 materialized, bundle members included.
 
+
+## Fixture 7, directories
+
+This fixture was written by this repo's own Rust command line in
+Round 5, because it freezes the amended wayside-checkpoint/2 format
+this slice introduces, the conditional directories field standing
+beside the databases field of Round 4, and no earlier writer of the
+amended format exists. It stands beside the frozen stores of the
+earlier rounds as the fixed record a later reader change must keep
+reading, under the fixture plan of the Round 5 design. All content
+is synthetic.
+
+Production calls. The producer drove the slice's command line over
+three state trees, each holding plan.txt with the bytes "first
+plan", with the memory document "memory one" and the env pair
+MODE=one declared on every call.
+
+    wayside --store <store> checkpoint alpha --state <state>
+    wayside --store <store> checkpoint alpha --state <state> --database data/app.db
+    wayside --store <store> checkpoint alpha --state <state>
+
+State one holds plan.txt alone. The first checkpoint declares no
+database and records no empty directory, so the manifest names
+wayside-checkpoint/1 and carries neither conditional field.
+
+State two adds data/app.db with the 41 bytes "synthetic fixture
+database, first writing" and data/app.db-wal with the 36 bytes
+"synthetic fixture wal, first writing", and no -journal. The second
+checkpoint declares data/app.db, so the bundle stands as the main
+file and the -wal, and the manifest names wayside-checkpoint/2 in
+its pre-amendment shape, the databases field standing and no
+directories field.
+
+State three holds plan.txt and the empty directories spool and
+spool/deep. The third checkpoint declares no database and records
+the two empty directories, so the manifest names
+wayside-checkpoint/2 in its amended shape, the directories field
+standing and no databases field.
+
+The manifests stand at sessions/alpha/checkpoints/000001, 000002,
+and 000003 in the frozen store and read as follows.
+
+```json
+{
+  "created_at": "2026-11-09T06:58:02.952118+00:00",
+  "env": {
+    "MODE": "one"
+  },
+  "files": [
+    {
+      "path": "plan.txt",
+      "sha256": "206169b704a6c4dbbddbf078201bf005fe6d4986e45a0e4069db9a726833d623",
+      "size": 11
+    }
+  ],
+  "format": "wayside-checkpoint/1",
+  "memory": {
+    "sha256": "800a6ffe176e497c690ebc628c5d5476a26e173adbf1206659e2e4c596aa3835",
+    "size": 11
+  },
+  "sequence": 1,
+  "session": "alpha"
+}
+```
+
+```json
+{
+  "created_at": "2026-11-09T06:58:02.956388+00:00",
+  "databases": [
+    {
+      "bundle_sha256": "8ffa3012cf71fa56efe8f9c640ef37722b65350ba99232f084d00c8c1fdea993",
+      "members": [
+        {
+          "path": "data/app.db",
+          "sha256": "1beb6ddc16fb40980436ed04113ede1f54eeb4e8a48553e748025c984747131d",
+          "size": 41
+        },
+        {
+          "path": "data/app.db-wal",
+          "sha256": "3b5dd25f9948a06f73d9c3af1403c4b691a3b71254122d79672e7ad2f080ee16",
+          "size": 36
+        }
+      ],
+      "path": "data/app.db"
+    }
+  ],
+  "env": {
+    "MODE": "one"
+  },
+  "files": [
+    {
+      "path": "plan.txt",
+      "sha256": "206169b704a6c4dbbddbf078201bf005fe6d4986e45a0e4069db9a726833d623",
+      "size": 11
+    }
+  ],
+  "format": "wayside-checkpoint/2",
+  "memory": {
+    "sha256": "800a6ffe176e497c690ebc628c5d5476a26e173adbf1206659e2e4c596aa3835",
+    "size": 11
+  },
+  "sequence": 2,
+  "session": "alpha"
+}
+```
+
+```json
+{
+  "created_at": "2026-11-09T06:58:02.960320+00:00",
+  "directories": [
+    "spool",
+    "spool/deep"
+  ],
+  "env": {
+    "MODE": "one"
+  },
+  "files": [
+    {
+      "path": "plan.txt",
+      "sha256": "206169b704a6c4dbbddbf078201bf005fe6d4986e45a0e4069db9a726833d623",
+      "size": 11
+    }
+  ],
+  "format": "wayside-checkpoint/2",
+  "memory": {
+    "sha256": "800a6ffe176e497c690ebc628c5d5476a26e173adbf1206659e2e4c596aa3835",
+    "size": 11
+  },
+  "sequence": 3,
+  "session": "alpha"
+}
+```
+
+Recorded truth beyond the standing shape stands in more files.
+expected-list-alpha.txt holds the list output for the session, one
+line per checkpoint with its sequence and creation time.
+expected-show-alpha-N.txt holds the show output for each
+checkpoint, the manifest exactly as recorded. expected-restore/
+alpha-2/ is the tree the restore of checkpoint 2 materialized,
+bundle members included, and expected-restore/alpha-3/ is the tree
+the restore of checkpoint 3 materialized. The directories of the
+alpha-2 tree stand in expected-restore-alpha-2-dirs.txt beside the
+tree, naming data alone, and the directories of the alpha-3 tree
+stand in expected-restore-alpha-3-dirs.txt, naming spool and
+spool/deep, because git carries no empty directory, so a tree to
+tree comparison cannot see an empty directory standing or missing
+on either side, and the directories of the alpha-3 tree are
+exactly the empty ones this fixture exists to record.
+inventory.sha256 pins the
+SHA-256 of every other file in this fixture.

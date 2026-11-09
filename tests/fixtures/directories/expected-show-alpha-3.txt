@@ -1,0 +1,24 @@
+{
+  "created_at": "2026-11-09T06:58:02.960320+00:00",
+  "directories": [
+    "spool",
+    "spool/deep"
+  ],
+  "env": {
+    "MODE": "one"
+  },
+  "files": [
+    {
+      "path": "plan.txt",
+      "sha256": "206169b704a6c4dbbddbf078201bf005fe6d4986e45a0e4069db9a726833d623",
+      "size": 11
+    }
+  ],
+  "format": "wayside-checkpoint/2",
+  "memory": {
+    "sha256": "800a6ffe176e497c690ebc628c5d5476a26e173adbf1206659e2e4c596aa3835",
+    "size": 11
+  },
+  "sequence": 3,
+  "session": "alpha"
+}

@@ -65,7 +65,9 @@ fn sequence_argument(value: &Bound<'_, PyAny>, name: &str) -> PyResult<i64> {
 /// Translate one validated manifest into a plain dictionary
 /// carrying every field the manifest carries, in the shape of
 /// the wayside-checkpoint formats themselves. The databases
-/// list stands empty for a wayside-checkpoint/1 manifest, as
+/// list stands empty for a wayside-checkpoint/1 manifest, and
+/// the directories list stands empty for a manifest that
+/// records no empty directory, as
 /// the forked_from entry stands empty for an unforked one.
 fn manifest_dict(py: Python<'_>, manifest: &Manifest) -> PyResult<Py<PyDict>> {
     let dict = PyDict::new(py);
@@ -108,6 +110,7 @@ fn manifest_dict(py: Python<'_>, manifest: &Manifest) -> PyResult<Py<PyDict>> {
         databases.push(database.unbind());
     }
     dict.set_item("databases", databases)?;
+    dict.set_item("directories", &manifest.directories)?;
     let forked_from = match &manifest.forked_from {
         Some(lineage) => {
             let fork = PyDict::new(py);

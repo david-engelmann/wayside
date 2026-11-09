@@ -112,7 +112,7 @@ session demo checkpoint 1
 
 ### Show the manifest
 
-Show prints the manifest of one checkpoint exactly as recorded. A checkpoint that declares at least one database is written in the wayside-checkpoint/2 format and carries the databases field, and a checkpoint that declares none is written as wayside-checkpoint/1 with no databases field. The manifest below records the bundle digest and each member's hash and size, and the -shm companion standing in the state directory appears nowhere in it.
+Show prints the manifest of one checkpoint exactly as recorded. A checkpoint that declares at least one database or records at least one empty directory is written in the wayside-checkpoint/2 format, and a checkpoint that declares a database carries the databases field and a checkpoint that records an empty directory carries the directories field, and a checkpoint that does neither is written as wayside-checkpoint/1 with neither field. The manifest below records the bundle digest and each member's hash and size, and the -shm companion standing in the state directory appears nowhere in it.
 
 ```
 wayside --store store show demo 1
@@ -289,7 +289,7 @@ first plan
 
 ## Status
 
-Every operation works today from the command line and from the Python binding. A checkpoint records the files of a session state directory with declared env pairs and a memory document, and a checkpoint that declares database bundles inside the state directory records each bundle as opaque bytes under a two reading consistency check that refuses a bundle whose second reading differs from its first. Restore, rewind, and fork verify every recorded payload against its recorded hash before placing a byte, verify re-reads a checkpoint without writing anything, and compare reports the standing of the databases of two checkpoints from their recorded digests alone.
+Every operation works today from the command line and from the Python binding. A checkpoint records the files and the empty directories of a session state directory with declared env pairs and a memory document, and a checkpoint that declares database bundles inside the state directory records each bundle as opaque bytes under a two reading consistency check that refuses a bundle whose second reading differs from its first. Restore, rewind, and fork verify every recorded payload against its recorded hash before placing a byte, verify re-reads a checkpoint without writing anything, and compare reports the standing of the databases of two checkpoints from their recorded digests alone.
 
 The limits are stated in the contract and hold in the code. One bundle's standing members may not sum past 268435456 bytes. A bundle's -shm companion is never recorded. Wayside snapshots no database reached through a connection, no file outside the state directory, and no state that lives only inside a running process. It builds no dump or load tooling, no compression, no encryption, and no cross-machine sync, and it runs no daemon and no watcher. A reader written against the wayside-checkpoint/1 format refuses a /2 manifest as corrupt before any byte is placed.
 
