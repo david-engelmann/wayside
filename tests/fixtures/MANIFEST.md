@@ -710,8 +710,12 @@ checkpoint, the manifest exactly as recorded. expected-restore/
 alpha-2/ is the tree the restore of checkpoint 2 materialized,
 bundle members included, and expected-restore/alpha-3/ is the tree
 the restore of checkpoint 3 materialized. The directories of the
-alpha-3 tree stand in expected-restore-alpha-3-dirs.txt beside the
-tree, naming spool and spool/deep, because git carries no empty
-directory and the directories of that tree are exactly the empty
-ones this fixture exists to record. inventory.sha256 pins the
+alpha-2 tree stand in expected-restore-alpha-2-dirs.txt beside the
+tree, naming data alone, and the directories of the alpha-3 tree
+stand in expected-restore-alpha-3-dirs.txt, naming spool and
+spool/deep, because git carries no empty directory, so a tree to
+tree comparison cannot see an empty directory standing or missing
+on either side, and the directories of the alpha-3 tree are
+exactly the empty ones this fixture exists to record.
+inventory.sha256 pins the
 SHA-256 of every other file in this fixture.
