@@ -113,6 +113,12 @@ type CapturedBundle = (String, Vec<(String, Vec<u8>)>);
 /// The directory listing the state tree walk reads through.
 type Lister = dyn Fn(&Path) -> io::Result<Vec<PathBuf>> + Send + Sync;
 
+/// One walked state tree: the file readings as relative path
+/// and bytes pairs in sorted order, together with the
+/// directories standing in the tree as relative paths in
+/// sorted order.
+type WalkedTree = (Vec<(String, Vec<u8>)>, Vec<String>);
+
 fn sha256_hex(data: &[u8]) -> String {
     let digest = Sha256::digest(data);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
@@ -1931,7 +1937,7 @@ impl Default for StateTreeReader {
 fn read_state_tree(
     state: &Path,
     reader: &StateTreeReader,
-) -> Result<(Vec<(String, Vec<u8>)>, Vec<String>)> {
+) -> Result<WalkedTree> {
     let mut entries = Vec::new();
     let mut dirs = Vec::new();
     read_state_dir(state, state, reader, &mut entries, &mut dirs)?;
