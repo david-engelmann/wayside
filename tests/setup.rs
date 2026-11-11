@@ -90,7 +90,7 @@ fn status_section(text: &str) -> &str {
 }
 
 #[test]
-fn readme_status_states_thirteen_of_one_hundred() {
+fn readme_status_states_fourteen_of_one_hundred() {
     let text = read("README.md");
     assert!(text.contains("## Status"));
     let status = status_section(&text);
@@ -98,7 +98,7 @@ fn readme_status_states_thirteen_of_one_hundred() {
     // bare count is a substring of every two digit count that
     // ends in the same digit and a pin on it would pass over
     // a wrong statement of the closed rounds.
-    assert!(status.contains("Closed perfection rounds are 13 of 100."));
+    assert!(status.contains("Closed perfection rounds are 14 of 100."));
     assert!(status.contains("a9bdc896322b1787d0719d6a76baaf1d91ef8860"));
 }
 
