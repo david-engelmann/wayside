@@ -145,8 +145,9 @@ fn main() -> ExitCode {
         .unwrap_or_else(|| PathBuf::from("."));
     match scan(&root) {
         Ok((em_count, en_count, lines)) => {
-            let counts =
-                format!("em dash U+2014 count {em_count}\nen dash U+2013 count {en_count}\n");
+            let counts = format!(
+                "em dash U+2014 count {em_count}\nen dash U+2013 count {en_count}\n"
+            );
             if let Err(ScanError(message)) = print_output(&format!("{lines}{counts}")) {
                 eprintln!("scan error, {message}");
                 return ExitCode::from(2);
