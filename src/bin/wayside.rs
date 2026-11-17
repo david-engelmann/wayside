@@ -389,9 +389,7 @@ fn print_output(text: &str) -> Result<(), Error> {
     let mut out = std::io::stdout().lock();
     out.write_all(text.as_bytes())
         .and_then(|()| out.flush())
-        .map_err(|exc| {
-            Error::Wayside(format!("the command output cannot be written, {exc}"))
-        })
+        .map_err(|exc| Error::Wayside(format!("the command output cannot be written, {exc}")))
 }
 
 /// Print a help text and exit: exit 0 when the text is
@@ -646,18 +644,14 @@ fn dispatch(argv: &[String]) -> Result<ExitCode, Error> {
                     wayside::DatabaseStanding::Different => {
                         text.push_str(&format!("{} different\n", entry.path))
                     }
-                    wayside::DatabaseStanding::OnlyFirst => {
-                        text.push_str(&format!(
-                            "{} recorded on checkpoint {first} only\n",
-                            entry.path
-                        ))
-                    }
-                    wayside::DatabaseStanding::OnlySecond => {
-                        text.push_str(&format!(
-                            "{} recorded on checkpoint {second} only\n",
-                            entry.path
-                        ))
-                    }
+                    wayside::DatabaseStanding::OnlyFirst => text.push_str(&format!(
+                        "{} recorded on checkpoint {first} only\n",
+                        entry.path
+                    )),
+                    wayside::DatabaseStanding::OnlySecond => text.push_str(&format!(
+                        "{} recorded on checkpoint {second} only\n",
+                        entry.path
+                    )),
                 }
             }
             print_output(&text)?;

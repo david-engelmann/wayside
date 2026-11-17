@@ -477,4 +477,3 @@ fn codepoint_scan_with_an_unwritable_output_is_a_scan_error() {
     assert!(stderr.contains("scan error"), "{stderr}");
     assert!(!stderr.contains("panicked"), "{stderr}");
 }
-

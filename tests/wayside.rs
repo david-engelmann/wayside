@@ -2057,4 +2057,3 @@ fn cli_list_with_an_unwritable_output_fails_with_a_typed_error() {
     );
     assert!(!listed.stderr.contains("panicked"), "{}", listed.stderr);
 }
-
