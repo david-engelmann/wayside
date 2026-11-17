@@ -2017,7 +2017,10 @@ fn read_state_dir(
         // rel_of renders the backslash as a slash, so the
         // entry would stand in the record under a path
         // that is not its own (WS-A33).
-        if path.file_name().is_some_and(|name| name.to_string_lossy().contains('\\')) {
+        if path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().contains('\\'))
+        {
             return Err(Error::wayside(format!(
                 "the state directory holds an entry whose name carries \
                  a backslash at {rel}, which a checkpoint does not record"
@@ -2045,7 +2048,10 @@ fn read_state_dir(
         // rel_of renders the backslash as a slash, so the
         // entry would stand in the record under a path
         // that is not its own (WS-A33).
-        if path.file_name().is_some_and(|name| name.to_string_lossy().contains('\\')) {
+        if path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().contains('\\'))
+        {
             return Err(Error::wayside(format!(
                 "the state directory holds an entry whose name carries \
                  a backslash at {rel}, which a checkpoint does not record"
