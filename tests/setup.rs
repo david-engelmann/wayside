@@ -14,6 +14,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use sha2::{Digest, Sha256};
+mod common;
+
+fn temp_dir(tag: &str) -> PathBuf {
+    common::temp_dir("wayside-setup-test", tag)
+}
 
 const MARKER: &str = "<!-- repo annex below this line -->";
 const GATE_COMMAND: &str = "cargo test";
@@ -27,13 +32,6 @@ fn root() -> PathBuf {
 
 fn read(name: &str) -> String {
     std::fs::read_to_string(root().join(name)).unwrap()
-}
-
-fn temp_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("wayside-setup-test-{}-{tag}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
 }
 
 #[test]
@@ -197,19 +195,29 @@ fn ci_carries_the_fleet_credential_hygiene() {
     assert!(text.contains("contents: read"));
     assert!(text.contains("persist-credentials: false"));
     assert!(!text.contains("rust-toolchain@master"));
-    let toolchain_line = text
+    // Every toolchain step stands judged, not only the first
+    // one the file finds: the workflow carries two, one per
+    // job, and a shortened pin on either fails this pin
+    // (WS-A12).
+    let toolchain_lines: Vec<&str> = text
         .lines()
-        .find(|line| line.contains("dtolnay/rust-toolchain@"))
-        .expect("the workflow carries no toolchain step");
-    let pin = toolchain_line
-        .split("dtolnay/rust-toolchain@")
-        .nth(1)
-        .unwrap()
-        .trim();
-    assert_eq!(pin.len(), 40, "{}", toolchain_line);
-    assert!(pin
-        .bytes()
-        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+        .filter(|line| line.contains("dtolnay/rust-toolchain@"))
+        .collect();
+    assert!(
+        !toolchain_lines.is_empty(),
+        "the workflow carries no toolchain step"
+    );
+    for toolchain_line in toolchain_lines {
+        let pin = toolchain_line
+            .split("dtolnay/rust-toolchain@")
+            .nth(1)
+            .unwrap()
+            .trim();
+        assert_eq!(pin.len(), 40, "{}", toolchain_line);
+        assert!(pin
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+    }
 }
 
 #[test]
@@ -441,4 +449,69 @@ fn codepoint_scan_takes_a_root_whose_name_is_not_unicode() {
     assert!(result.stdout.contains("em dash U+2014 count 0"));
     assert!(result.stdout.contains("en dash U+2013 count 0"));
     assert!(!result.stderr.contains("panicked"), "{}", result.stderr);
+}
+
+/// WS-A26: a scan whose output cannot be written is a scan
+/// error at exit 2, never a panic. The pin points the
+/// scanner's standard output at /dev/full, whose every write
+/// fails. On the code this pin was written against, the count
+/// prints panicked and the process died at exit 101.
+#[cfg(unix)]
+#[test]
+fn codepoint_scan_with_an_unwritable_output_is_a_scan_error() {
+    use std::io::Read;
+
+    let dir = temp_dir("full-output");
+    std::fs::write(dir.join("clean.md"), "clean").unwrap();
+    let full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_codepoint_scan"))
+        .arg(&dir)
+        .stdout(std::process::Stdio::from(full))
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    let status = child.wait().unwrap();
+    assert_eq!(status.code().unwrap_or(-1), 2, "{stderr}");
+    assert!(stderr.contains("scan error"), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}
+
+/// WS-A26, the both streams shape: with stderr also
+/// redirected to /dev/full, the scan error line cannot be
+/// written, and the exit code still carries the failure.
+/// On the code this pin was written against, eprintln!
+/// panicked on the failed stderr write and the scanner
+/// exited 101.
+#[cfg(unix)]
+#[test]
+fn codepoint_scan_with_both_streams_unwritable_keeps_exit_2() {
+    use std::process::Stdio;
+
+    let root = temp_dir("scan-both-full");
+    std::fs::write(root.join("a.txt"), "plain\n").unwrap();
+    let out_full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let err_full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let status = Command::new(env!("CARGO_BIN_EXE_codepoint_scan"))
+        .arg(&root)
+        .stdout(Stdio::from(out_full))
+        .stderr(Stdio::from(err_full))
+        .status()
+        .unwrap();
+    assert_eq!(status.code().unwrap_or(-1), 2);
 }
