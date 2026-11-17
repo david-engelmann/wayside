@@ -1633,6 +1633,38 @@ fn verify_of_a_missing_checkpoint_is_not_found() {
     assert!(matches!(error, Error::NotFound(_)), "{error:?}");
 }
 
+// WS-17's other half: with more than one payload damaged, the
+// refusal names the FIRST in the reading order, the recorded
+// files, then the bundle's members, then the memory document.
+// A file and a member damaged together draw the file's name;
+// a member and the memory damaged together draw the member's.
+#[test]
+fn verify_names_the_first_damaged_payload_in_reading_order() {
+    let (_base, store) = damaged_v2_store("verify-first-file");
+    flip_first_byte(&checkpoint_dir(&store, "alpha", 1).join("files/data/app.db-wal"));
+    flip_first_byte(&checkpoint_dir(&store, "alpha", 1).join("files/notes.txt"));
+    let error = expect_error(verify_checkpoint(&store, "alpha", 1));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(error.message().contains("notes.txt"), "{}", error.message());
+    assert!(
+        !error.message().contains("app.db-wal"),
+        "{}",
+        error.message()
+    );
+
+    let (_base, store) = damaged_v2_store("verify-first-member");
+    flip_first_byte(&checkpoint_dir(&store, "alpha", 1).join("memory.bin"));
+    flip_first_byte(&checkpoint_dir(&store, "alpha", 1).join("files/data/app.db"));
+    let error = expect_error(verify_checkpoint(&store, "alpha", 1));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(error.message().contains("data/app.db"), "{}", error.message());
+    assert!(
+        !error.message().contains("memory document"),
+        "{}",
+        error.message()
+    );
+}
+
 // WS-18, compare.
 
 #[test]
