@@ -376,7 +376,12 @@ fn read_memory(path: Option<&str>) -> Result<Vec<u8>, Error> {
 }
 
 fn report_error(error: &Error) -> ExitCode {
-    eprintln!("error: {}", error.message());
+    // The error line is written fallibly: when stderr itself
+    // cannot be written there is no channel left to report
+    // through, and the exit code still carries the failure
+    // (WS-A26).
+    let mut err_out = std::io::stderr();
+    let _ = writeln!(err_out, "error: {}", error.message());
     ExitCode::from(error.exit_code() as u8)
 }
 
@@ -399,7 +404,8 @@ fn exit_after_print(text: &str) -> ! {
     match print_output(text) {
         Ok(()) => std::process::exit(0),
         Err(error) => {
-            eprintln!("error: {}", error.message());
+            let mut err_out = std::io::stderr();
+            let _ = writeln!(err_out, "error: {}", error.message());
             std::process::exit(error.exit_code());
         }
     }
@@ -666,8 +672,9 @@ fn dispatch(argv: &[String]) -> Result<ExitCode, Error> {
 }
 
 fn parser_fail(usage: &str, prog: &str, message: &str) -> ExitCode {
-    eprintln!("{usage}");
-    eprintln!("{prog}: error: {message}");
+    let mut err_out = std::io::stderr();
+    let _ = writeln!(err_out, "{usage}");
+    let _ = writeln!(err_out, "{prog}: error: {message}");
     ExitCode::from(2)
 }
 

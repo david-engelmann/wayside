@@ -2057,3 +2057,43 @@ fn cli_list_with_an_unwritable_output_fails_with_a_typed_error() {
     );
     assert!(!listed.stderr.contains("panicked"), "{}", listed.stderr);
 }
+
+/// Run the command line with both standard streams
+/// redirected to /dev/full and return the exit status.
+#[cfg(unix)]
+fn run_cli_both_full(args: &[&str]) -> i32 {
+    use std::process::Stdio;
+
+    let out_full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let err_full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_wayside"))
+        .args(args)
+        .stdout(Stdio::from(out_full))
+        .stderr(Stdio::from(err_full))
+        .spawn()
+        .unwrap();
+    child.wait().unwrap().code().unwrap_or(-1)
+}
+
+/// WS-A26, the both streams shape: with stderr also
+/// unwritable, the error line cannot be written at all,
+/// and the typed exit code still carries the failure. On
+/// the code this pin was written against, eprintln!
+/// panicked on the failed stderr write and the command
+/// exited 101.
+#[cfg(unix)]
+#[test]
+fn cli_show_with_both_streams_unwritable_keeps_the_typed_exit() {
+    let base = temp_dir("cli-both-full");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    let status = run_cli_both_full(&["--store", store.to_str().unwrap(), "show", "alpha", "1"]);
+    assert_eq!(status, 1);
+}

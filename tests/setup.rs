@@ -477,3 +477,33 @@ fn codepoint_scan_with_an_unwritable_output_is_a_scan_error() {
     assert!(stderr.contains("scan error"), "{stderr}");
     assert!(!stderr.contains("panicked"), "{stderr}");
 }
+
+/// WS-A26, the both streams shape: with stderr also
+/// redirected to /dev/full, the scan error line cannot be
+/// written, and the exit code still carries the failure.
+/// On the code this pin was written against, eprintln!
+/// panicked on the failed stderr write and the scanner
+/// exited 101.
+#[cfg(unix)]
+#[test]
+fn codepoint_scan_with_both_streams_unwritable_keeps_exit_2() {
+    use std::process::Stdio;
+
+    let root = temp_dir("scan-both-full");
+    std::fs::write(root.join("a.txt"), "plain\n").unwrap();
+    let out_full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let err_full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let status = Command::new(env!("CARGO_BIN_EXE_codepoint_scan"))
+        .arg(&root)
+        .stdout(Stdio::from(out_full))
+        .stderr(Stdio::from(err_full))
+        .status()
+        .unwrap();
+    assert_eq!(status.code().unwrap_or(-1), 2);
+}

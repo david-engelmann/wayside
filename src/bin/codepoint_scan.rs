@@ -148,7 +148,8 @@ fn main() -> ExitCode {
             let counts =
                 format!("em dash U+2014 count {em_count}\nen dash U+2013 count {en_count}\n");
             if let Err(ScanError(message)) = print_output(&format!("{lines}{counts}")) {
-                eprintln!("scan error, {message}");
+                let mut err_out = std::io::stderr();
+                let _ = writeln!(err_out, "scan error, {message}");
                 return ExitCode::from(2);
             }
             if em_count > 0 || en_count > 0 {
@@ -158,7 +159,8 @@ fn main() -> ExitCode {
             }
         }
         Err(ScanError(message)) => {
-            eprintln!("scan error, {message}");
+            let mut err_out = std::io::stderr();
+            let _ = writeln!(err_out, "scan error, {message}");
             ExitCode::from(2)
         }
     }
