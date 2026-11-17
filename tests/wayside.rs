@@ -1,8 +1,14 @@
 //! The behaviour pins, translated pin for pin from the Python
-//! suite that closed Round 1. Each test names the same fact its
-//! Python original named, and the parametrized families expand
-//! to one test per value, named by the value, keeping the item
-//! count at parity: 76 translated tests. Where the Rust harness
+//! suite that closed Round 1. Each translated test names the
+//! same fact its Python original named, and the parametrized
+//! families expand to one test per value, named by the value.
+//! The translation stood at parity with the Python suite when
+//! the port landed, at 76 translated tests. Pins added since
+//! the port, by the port's own repair pass and by the audit
+//! programme, stand beside the translated family and carry
+//! their finding numbers where they land, so the file's test
+//! count is no longer the translated count. Where the Rust
+//! harness
 //! cannot carry a Python mechanism, the pin keeps its substance
 //! and changes its injection, and each such change is stated
 //! where it lands. The monkeypatched directory listing of the
