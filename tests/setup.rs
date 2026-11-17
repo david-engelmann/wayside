@@ -518,9 +518,5 @@ fn codepoint_scan_refuses_a_root_that_does_not_stand() {
     let result = scan_tree(&root);
     assert_eq!(result.status, 2);
     assert!(result.stderr.contains("scan error"), "{}", result.stderr);
-    assert!(
-        result.stderr.contains("no-such-tree"),
-        "{}",
-        result.stderr
-    );
+    assert!(result.stderr.contains("no-such-tree"), "{}", result.stderr);
 }
