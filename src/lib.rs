@@ -1526,6 +1526,10 @@ fn is_sequence_dir_name(name: &str) -> bool {
 /// toward the listing here (the metadata test follows links),
 /// even though every read of it is refused by the link checks,
 /// and a residue directory under a temporary name never counts.
+/// A digit name counts only when it is the canonical rendering
+/// of its value, the name sequence_name writes, so an alias
+/// spelling with extra leading zeros names no published
+/// checkpoint and is passed over like any other residue.
 fn published_sequences(root: &Path, session: &str) -> Vec<i64> {
     let ck_dir = checkpoints_dir(root, session);
     let entries = match fs::read_dir(&ck_dir) {
@@ -1537,7 +1541,9 @@ fn published_sequences(root: &Path, session: &str) -> Vec<i64> {
         let name = entry.file_name().to_string_lossy().into_owned();
         if is_sequence_dir_name(&name) && entry.path().is_dir() {
             if let Ok(sequence) = name.parse::<i64>() {
-                sequences.push(sequence);
+                if name == sequence_name(sequence) {
+                    sequences.push(sequence);
+                }
             }
         }
     }
