@@ -13,13 +13,13 @@ use std::path::{Path, PathBuf};
 
 use wayside::{
     checkpoint, checkpoint_with_databases, fork, list_checkpoints, render_manifest, restore,
-    rewind, show, verify_checkpoint, Error,
+    rewind, show, verify_checkpoint,
 };
 mod common;
 
 use common::{
-    checkpoint_dir, copy_tree, damage_manifest_json, declare, expect_error, manifest_path,
-    make_state, run_cli, sha256_hex, CliOutput,
+    checkpoint_dir, copy_tree, damage_manifest_json, declare, expect_error, make_state,
+    manifest_path, run_cli, sha256_hex,
 };
 
 fn temp_dir(tag: &str) -> PathBuf {

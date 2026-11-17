@@ -32,7 +32,7 @@ mod common;
 
 use common::{
     checkpoint_dir, copy_tree, damage_manifest_json, damage_manifest_text, expect_error, hash_tree,
-    manifest_path, make_state, run_cli, sha256_hex, tree_bytes, CliOutput, EMPTY_SHA256,
+    make_state, manifest_path, run_cli, sha256_hex, tree_bytes, CliOutput, EMPTY_SHA256,
 };
 
 fn temp_dir(tag: &str) -> PathBuf {

@@ -24,10 +24,7 @@ static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 pub fn temp_dir(prefix: &str, tag: &str) -> PathBuf {
     let count = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!(
-        "{prefix}-{}-{tag}-{count}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("{prefix}-{}-{tag}-{count}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
