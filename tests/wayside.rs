@@ -772,6 +772,43 @@ fn planted_residue_is_ignored_by_list_and_sequence() {
     assert_eq!(list_checkpoints(&store, "ghost").unwrap(), []);
 }
 
+#[test]
+fn planted_non_canonical_sequence_directory_is_ignored() {
+    let base = temp_dir("non-canonical");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    // An alias spelling of sequence 1: a full copy of the real
+    // checkpoint directory under a name with an extra zero.
+    copy_tree(
+        &checkpoint_dir(&store, "alpha", 1),
+        &store
+            .join("sessions")
+            .join("alpha")
+            .join("checkpoints")
+            .join("0000001"),
+    );
+    // An alias spelling of a higher value whose canonical
+    // directory does not stand at all.
+    std::fs::create_dir_all(
+        store
+            .join("sessions")
+            .join("alpha")
+            .join("checkpoints")
+            .join("0000007"),
+    )
+    .unwrap();
+    let listed: Vec<i64> = list_checkpoints(&store, "alpha")
+        .unwrap()
+        .iter()
+        .map(|entry| entry.sequence)
+        .collect();
+    assert_eq!(listed, [1]);
+    assert_eq!(show(&store, "alpha", 1).unwrap().sequence, 1);
+    let manifest = checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    assert_eq!(manifest.sequence, 2);
+}
+
 /// The worker mode of the parallel writers pin. Spawned by
 /// the pin below as a separate process with the
 /// WAYSIDE_WORKER_ variables set; run by the suite without
