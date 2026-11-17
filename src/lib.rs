@@ -2013,6 +2013,19 @@ fn read_state_dir(
                  which a checkpoint does not record"
             )));
         }
+        // A name carrying a backslash cannot be recorded:
+        // rel_of renders the backslash as a slash, so the
+        // entry would stand in the record under a path
+        // that is not its own (WS-A33).
+        if path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().contains('\\'))
+        {
+            return Err(Error::wayside(format!(
+                "the state directory holds an entry whose name carries \
+                 a backslash at {rel}, which a checkpoint does not record"
+            )));
+        }
         if !rel.contains('/') && RESERVED_TOP_LEVEL.contains(&rel.as_str()) {
             return Err(Error::wayside(format!(
                 "the state directory holds a top level directory named {rel}, \
@@ -2029,6 +2042,19 @@ fn read_state_dir(
             return Err(Error::wayside(format!(
                 "the state directory holds a symbolic link at {rel}, \
                  which a checkpoint does not record"
+            )));
+        }
+        // A name carrying a backslash cannot be recorded:
+        // rel_of renders the backslash as a slash, so the
+        // entry would stand in the record under a path
+        // that is not its own (WS-A33).
+        if path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().contains('\\'))
+        {
+            return Err(Error::wayside(format!(
+                "the state directory holds an entry whose name carries \
+                 a backslash at {rel}, which a checkpoint does not record"
             )));
         }
         if !path.is_file() {
