@@ -1832,6 +1832,11 @@ fn cli_accepts_options_in_the_equals_form() {
     assert_eq!(shown.status, 0, "{}", shown.stderr);
     let value: serde_json::Value = serde_json::from_str(&shown.stdout).unwrap();
     assert_eq!(value["env"], serde_json::json!({"MODE": "cli"}));
+    assert_eq!(value["memory"]["size"].as_i64(), Some(10));
+    assert_eq!(
+        value["memory"]["sha256"].as_str(),
+        Some("db0e389c306df2e7e451ffc04c4c5d46e171afbb1b436d3611b141bc3ba319ae")
+    );
     let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
         .arg(format!("--store={}", store.display()))
         .args(["list", "alpha"])
@@ -1972,7 +1977,8 @@ fn cli_refuses_an_option_left_without_a_value() {
 // the main usage and the command list; a subcommand's help
 // carries that command's usage and options. Help is a parser
 // success, not an error, and it runs before the store option
-// is required.
+// is required; both calls below supply no store option, so
+// that claim is exercised rather than assumed.
 #[test]
 fn cli_help_prints_the_usage_and_exits_zero() {
     let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
@@ -1989,22 +1995,17 @@ fn cli_help_prints_the_usage_and_exits_zero() {
         stdout.contains("record a new checkpoint of a session"),
         "{stdout}"
     );
-    let base = temp_dir("cli-help");
-    let store = base.join("store");
-    let result = run_cli(&store, &["checkpoint", "--help"]);
-    assert_eq!(result.status, 0, "{}", result.stderr);
+    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
+        .args(["checkpoint", "--help"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert_eq!(output.status.code().unwrap_or(-1), 0, "{stdout}");
     assert!(
-        result
-            .stdout
-            .contains("usage: wayside checkpoint [-h] --state STATE"),
-        "{}",
-        result.stdout
+        stdout.contains("usage: wayside checkpoint [-h] --state STATE"),
+        "{stdout}"
     );
-    assert!(
-        result.stdout.contains("--database PATH"),
-        "{}",
-        result.stdout
-    );
+    assert!(stdout.contains("--database PATH"), "{stdout}");
 }
 
 // WS-A45: the double dash ends option parsing. A token after
