@@ -1992,11 +1992,8 @@ fn read_state_dir(
     }
     let by_name = |a: &PathBuf, b: &PathBuf| {
         a.file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .cmp(
-                &b.file_name()
-                    .map(|name| name.to_string_lossy().into_owned()),
-            )
+            .map(|name| name.to_string_lossy())
+            .cmp(&b.file_name().map(|name| name.to_string_lossy()))
     };
     dirs.sort_by(by_name);
     files.sort_by(by_name);
