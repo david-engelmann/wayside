@@ -763,6 +763,99 @@ fn sidecar_disappearing_between_readings_is_refused() {
     assert_eq!(next.sequence, 1);
 }
 
+#[test]
+fn main_member_probe_reporting_past_the_bound_is_refused_at_the_bound() {
+    // WS-A3: every member is length probed before it is read,
+    // the main member included, and the probed size is judged
+    // against the bound before the read begins. The staged
+    // probe reports the bound plus one for the main member at
+    // the second pass while the file on disk stays small, so
+    // only the probe judgement can refuse this capture; on
+    // the code this pin was written against, the main member
+    // was never probed, its staged standing never fired, and
+    // the capture succeeded.
+    let base = temp_dir("bound-main-probe");
+    let store = base.join("store");
+    let state = staged_state(&base);
+    let reader =
+        StateTreeReader::appearing_on_second_probe(&state.join("data/app.db"), BUNDLE_BOUND + 1);
+    let error = expect_error(checkpoint_with_databases_and_reader(
+        &store,
+        "alpha",
+        &state,
+        None,
+        b"",
+        &declare(&["data/app.db"]),
+        &reader,
+    ));
+    assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert!(
+        error.message().contains("sums past the bundle bound"),
+        "{}",
+        error.message()
+    );
+    let next = db_checkpoint(&store, "alpha", &state, &["data/app.db"]).unwrap();
+    assert_eq!(next.sequence, 1);
+}
+
+#[test]
+fn sidecar_probe_reporting_past_the_bound_is_refused_at_the_bound() {
+    // WS-A3: a sidecar's probed size is judged, not discarded.
+    // The staged probe reports the bound plus one for the
+    // standing wal at the second pass while the file on disk
+    // stays small; on the code this pin was written against,
+    // the probe judged standing only and the capture
+    // succeeded on the small bytes actually read.
+    let base = temp_dir("bound-wal-probe");
+    let store = base.join("store");
+    let state = staged_state(&base);
+    let reader = StateTreeReader::appearing_on_second_probe(
+        &state.join("data/app.db-wal"),
+        BUNDLE_BOUND + 1,
+    );
+    let error = expect_error(checkpoint_with_databases_and_reader(
+        &store,
+        "alpha",
+        &state,
+        None,
+        b"",
+        &declare(&["data/app.db"]),
+        &reader,
+    ));
+    assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert!(
+        error.message().contains("sums past the bundle bound"),
+        "{}",
+        error.message()
+    );
+    let next = db_checkpoint(&store, "alpha", &state, &["data/app.db"]).unwrap();
+    assert_eq!(next.sequence, 1);
+}
+
+#[test]
+fn main_member_vanishing_at_its_probe_is_refused_as_changed() {
+    // WS-A3: a probe that reports the main member absent
+    // refuses the reading as changed during capture, the
+    // refusal the failed read produced when the main member
+    // was reached only through its read. On the code this
+    // pin was written against, the main member was never
+    // probed, the staged vanishing never fired, and the
+    // capture succeeded.
+    let base = temp_dir("changed-main-probe-vanish");
+    let store = base.join("store");
+    let state = staged_state(&base);
+    let reader = StateTreeReader::vanishing_on_second_probe(&state.join("data/app.db"));
+    let error = changed_refusal(&store, &state, reader);
+    assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert!(
+        error.message().contains("changed during capture"),
+        "{}",
+        error.message()
+    );
+    let next = db_checkpoint(&store, "alpha", &state, &["data/app.db"]).unwrap();
+    assert_eq!(next.sequence, 1);
+}
+
 /// The worker mode of the parallel database writers pin.
 /// Spawned by the pin below as a separate process with the
 /// WAYSIDE_DB_WORKER_ variables set; run by the suite without

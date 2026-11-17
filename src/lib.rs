@@ -2261,12 +2261,16 @@ fn bundle_names(rel: &str) -> [String; 3] {
 /// One reading of a bundle at the source (WS-13): the main
 /// file's bytes, and the bytes of each sidecar that stands,
 /// read through the reader seam, with the counted copy
-/// refusing the bundle as it passes the bound of WS-14. A
-/// member that cannot be read whole fails the reading as a
-/// change during capture, which is the true summary of every
-/// case that reaches a pass: the tree walk read every member
-/// whole before the lock, so a member that cannot be read
-/// whole now is a member that moved.
+/// refusing the bundle as it passes the bound of WS-14. Each
+/// member's standing size is probed before it is read and
+/// judged against the same bound, so a member that has grown
+/// past the bound since the walk is refused before its bytes
+/// are read whole under the lock (WS-A3). A member that
+/// cannot be read whole fails the reading as a change during
+/// capture, which is the true summary of every case that
+/// reaches a pass: the tree walk read every member whole
+/// before the lock, so a member that cannot be read whole
+/// now is a member that moved.
 fn read_bundle_pass(
     state_dir: &Path,
     declared_rel: &str,
@@ -2283,12 +2287,19 @@ fn read_bundle_pass(
     let names = bundle_names(declared_rel);
     for (index, member_rel) in names.iter().enumerate() {
         let member_path = join_rel(state_dir, member_rel);
-        if index > 0 {
-            match reader.member_len(&member_path) {
-                Ok(Some(_)) => {}
-                Ok(None) => continue,
-                Err(_) => return Err(changed()),
+        match reader.member_len(&member_path) {
+            Ok(Some(len)) => {
+                if total + len as u128 > BUNDLE_BOUND as u128 {
+                    return Err(bound_error(declared_rel));
+                }
             }
+            Ok(None) => {
+                if index == 0 {
+                    return Err(changed());
+                }
+                continue;
+            }
+            Err(_) => return Err(changed()),
         }
         let data = reader.read_bytes(&member_path).map_err(|_| changed())?;
         total += data.len() as u128;
