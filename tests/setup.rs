@@ -404,3 +404,20 @@ fn codepoint_scan_skips_a_file_with_an_uppercase_binary_suffix() {
     assert!(result.stdout.contains("em dash U+2014 count 0"));
     assert!(result.stdout.contains("en dash U+2013 count 0"));
 }
+
+#[cfg(unix)]
+#[test]
+fn codepoint_scan_passes_over_a_pipe_instead_of_reading_it() {
+    let dir = temp_dir("pipe");
+    std::fs::write(dir.join("clean.md"), "clean").unwrap();
+    let pipe = dir.join("pipe");
+    let status = Command::new("mkfifo").arg(&pipe).status().unwrap();
+    assert!(status.success());
+    // A scan that collected the pipe as a file would block on
+    // reading it and never return, so the scan completing at
+    // all is the pin; it reports the clean file only.
+    let result = scan_tree(&dir);
+    assert_eq!(result.status, 0, "{}", result.stderr);
+    assert!(result.stdout.contains("em dash U+2014 count 0"));
+    assert!(result.stdout.contains("en dash U+2013 count 0"));
+}
