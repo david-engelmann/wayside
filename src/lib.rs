@@ -559,15 +559,10 @@ fn validate_recorded_path(rel: &StrictValue, path: &Path) -> Result<String> {
 
 /// Whether a recorded path list stands in path order with no
 /// path repeated (WS-A18): the order and uniqueness judgement
-/// the manifest validators share.
+/// the manifest validators share, judged on adjacent entries,
+/// which decide the fact directly (WS-A35).
 fn paths_in_order_without_repeats(paths: &[String]) -> bool {
-    let mut sorted = paths.to_vec();
-    sorted.sort();
-    if paths != sorted.as_slice() {
-        return false;
-    }
-    sorted.dedup();
-    sorted.len() == paths.len()
+    paths.windows(2).all(|pair| pair[0] < pair[1])
 }
 
 /// Whether a recorded path list repeats no path, in any order
