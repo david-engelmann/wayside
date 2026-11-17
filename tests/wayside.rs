@@ -21,137 +21,31 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use sha2::{Digest, Sha256};
 use wayside::{
     checkpoint, checkpoint_with_reader, fork, list_checkpoints, restore, rewind, show, Error,
     StateTreeReader,
 };
+mod common;
 
-const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-
-static COUNTER: AtomicUsize = AtomicUsize::new(0);
-static ENV_LOCK: Mutex<()> = Mutex::new(());
+use common::{
+    checkpoint_dir, copy_tree, damage_manifest_json, damage_manifest_text, expect_error, hash_tree,
+    make_state, manifest_path, run_cli, sha256_hex, tree_bytes, CliOutput, EMPTY_SHA256,
+};
 
 fn temp_dir(tag: &str) -> PathBuf {
-    let count = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let dir =
-        std::env::temp_dir().join(format!("wayside-test-{}-{tag}-{count}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+    common::temp_dir("wayside-test", tag)
 }
 
-fn sha256_hex(data: &[u8]) -> String {
-    Sha256::digest(data)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
-fn make_state(base: &Path, files: &[(&str, &[u8])]) -> PathBuf {
-    let state = base.to_path_buf();
-    std::fs::create_dir_all(&state).unwrap();
-    for (rel, data) in files {
-        let path = state.join(rel);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, data).unwrap();
-    }
-    state
-}
-
-fn checkpoint_dir(store: &Path, session: &str, sequence: i64) -> PathBuf {
-    store
-        .join("sessions")
-        .join(session)
-        .join("checkpoints")
-        .join(format!("{sequence:06}"))
-}
-
-fn manifest_path(store: &Path, session: &str, sequence: i64) -> PathBuf {
-    checkpoint_dir(store, session, sequence).join("manifest.json")
-}
-
-fn hash_tree(root: &Path) -> BTreeMap<String, String> {
-    let mut result = BTreeMap::new();
-    hash_tree_into(root, root, &mut result);
-    result
-}
-
-fn hash_tree_into(root: &Path, dir: &Path, result: &mut BTreeMap<String, String>) {
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
-        .unwrap()
-        .flatten()
-        .map(|entry| entry.path())
-        .collect();
-    entries.sort();
-    for path in entries {
-        if path.is_dir() {
-            hash_tree_into(root, &path, result);
-        } else if path.is_file() {
-            let rel = path
-                .strip_prefix(root)
-                .unwrap()
-                .to_string_lossy()
-                .replace('\\', "/");
-            result.insert(rel, sha256_hex(&std::fs::read(&path).unwrap()));
-        }
-    }
-}
-
-fn copy_tree(from: &Path, to: &Path) {
-    std::fs::create_dir_all(to).unwrap();
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(from)
-        .unwrap()
-        .flatten()
-        .map(|entry| entry.path())
-        .collect();
-    entries.sort();
-    for path in entries {
-        let dest = to.join(path.file_name().unwrap());
-        if path.is_dir() {
-            copy_tree(&path, &dest);
-        } else {
-            std::fs::copy(&path, &dest).unwrap();
-        }
-    }
-}
+static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn env_of(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
     pairs
         .iter()
         .map(|(key, value)| (key.to_string(), value.to_string()))
         .collect()
-}
-
-fn expect_error<T>(result: wayside::Result<T>) -> Error {
-    match result {
-        Ok(_) => panic!("the operation succeeded where the pin requires a refusal"),
-        Err(error) => error,
-    }
-}
-
-struct CliOutput {
-    status: i32,
-    stdout: String,
-    stderr: String,
-}
-
-fn run_cli(store: &Path, args: &[&str]) -> CliOutput {
-    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
-        .arg("--store")
-        .arg(store)
-        .args(args)
-        .output()
-        .unwrap();
-    CliOutput {
-        status: output.status.code().unwrap_or(-1),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-    }
 }
 
 /// Drive the CLI with a deadline, for the pin whose Python
@@ -195,19 +89,6 @@ fn run_cli_timed(store: &Path, args: &[&str], timeout: Duration) -> CliOutput {
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-}
-
-fn damage_manifest_json(
-    store: &Path,
-    session: &str,
-    sequence: i64,
-    damage: &dyn Fn(&mut serde_json::Value),
-) {
-    let path = manifest_path(store, session, sequence);
-    let mut value: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    damage(&mut value);
-    std::fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
 }
 
 #[test]
@@ -592,17 +473,6 @@ fn a_checkpoint_never_changes_once_written() {
     checkpoint(&store, "alpha", &state, None, b"two").unwrap();
     checkpoint(&store, "alpha", &state, None, b"three").unwrap();
     assert_eq!(hash_tree(&checkpoint_dir(&store, "alpha", 1)), before);
-}
-
-fn damage_manifest_text(
-    store: &Path,
-    session: &str,
-    sequence: i64,
-    damage: &dyn Fn(&str) -> String,
-) {
-    let path = manifest_path(store, session, sequence);
-    let text = std::fs::read_to_string(&path).unwrap();
-    std::fs::write(&path, damage(&text)).unwrap();
 }
 
 #[test]
@@ -1782,6 +1652,63 @@ fn checkpoint_fails_when_the_state_directory_cannot_be_listed() {
     assert!(!checkpoint_dir(&store, "alpha", 1).exists());
 }
 
+/// WS-A27: a state tree holding a name that is not valid
+/// UTF-8 is refused at the walk. On the code this pin was
+/// written against, the name was recorded under its lossy
+/// rendering and restored under that rendering, silently.
+#[cfg(unix)]
+#[test]
+fn checkpoint_refuses_a_state_file_whose_name_is_not_valid_utf8() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let base = temp_dir("walk-non-utf8-file");
+    let store = base.join("store");
+    let state = base.join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(state.join("plain.txt"), b"plain").unwrap();
+    let bad = std::ffi::OsString::from_vec(b"bad-\xff.txt".to_vec());
+    std::fs::write(state.join(bad), b"bad bytes").unwrap();
+    let error = expect_error(checkpoint(&store, "alpha", &state, None, b""));
+    assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert!(
+        error.message().contains("not valid UTF-8"),
+        "{}",
+        error.message()
+    );
+    assert!(!checkpoint_dir(&store, "alpha", 1).exists());
+    // The refusal consumed no sequence: the next clean
+    // checkpoint of the session takes sequence 1.
+    let clean = make_state(&base.join("clean"), &[("a.txt", b"a")]);
+    let manifest = checkpoint(&store, "alpha", &clean, None, b"").unwrap();
+    assert_eq!(manifest.sequence, 1);
+}
+
+/// WS-A27: the directory shape of the same refusal. On the
+/// code this pin was written against, the directory's name
+/// was recorded under its lossy rendering and its payload
+/// restored under that rendering.
+#[cfg(unix)]
+#[test]
+fn checkpoint_refuses_a_state_directory_whose_name_is_not_valid_utf8() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let base = temp_dir("walk-non-utf8-dir");
+    let store = base.join("store");
+    let state = base.join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    let dir = state.join(std::ffi::OsString::from_vec(b"bad-\xfe".to_vec()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("inner.txt"), b"inner").unwrap();
+    let error = expect_error(checkpoint(&store, "alpha", &state, None, b""));
+    assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert!(
+        error.message().contains("not valid UTF-8"),
+        "{}",
+        error.message()
+    );
+    assert!(!checkpoint_dir(&store, "alpha", 1).exists());
+}
+
 #[test]
 fn cli_memory_symlink_is_refused_with_its_own_message() {
     let base = temp_dir("cli-memory-link");
@@ -1829,33 +1756,6 @@ fn fixture_root(name: &str) -> PathBuf {
         .join("tests")
         .join("fixtures")
         .join(name)
-}
-
-fn tree_bytes(root: &Path) -> BTreeMap<String, Vec<u8>> {
-    let mut result = BTreeMap::new();
-    tree_bytes_into(root, root, &mut result);
-    result
-}
-
-fn tree_bytes_into(root: &Path, dir: &Path, result: &mut BTreeMap<String, Vec<u8>>) {
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
-        .unwrap()
-        .flatten()
-        .map(|entry| entry.path())
-        .collect();
-    entries.sort();
-    for path in entries {
-        if path.is_dir() {
-            tree_bytes_into(root, &path, result);
-        } else {
-            let rel = path
-                .strip_prefix(root)
-                .unwrap()
-                .to_string_lossy()
-                .replace('\\', "/");
-            result.insert(rel, std::fs::read(&path).unwrap());
-        }
-    }
 }
 
 fn fixture_case(name: &str, sessions: &[(&str, &[i64])], grow_session: &str, next_sequence: i64) {
@@ -1978,4 +1878,122 @@ fn manifest_bytes_match_the_python_layout_for_non_ascii_content() {
     // The rendered show text is the stored text but for the
     // trailing newline both forms carry.
     assert_eq!(format!("{}\n", wayside::render_manifest(&manifest)), stored);
+}
+
+/// WS-A26: run the command line with its standard output
+/// pointed at /dev/full, a device whose every write fails, so
+/// an output failure is staged exactly, with no race against
+/// a closing reader.
+#[cfg(unix)]
+fn run_cli_stdout_full(store: &Path, args: &[&str]) -> CliOutput {
+    use std::io::Read;
+
+    let full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_wayside"))
+        .arg("--store")
+        .arg(store)
+        .args(args)
+        .stdout(std::process::Stdio::from(full))
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    let status = child.wait().unwrap();
+    CliOutput {
+        status: status.code().unwrap_or(-1),
+        stdout: String::new(),
+        stderr,
+    }
+}
+
+/// WS-A26: a command whose result cannot be printed fails
+/// with a typed error, never a panic. On the code this pin
+/// was written against, the show print panicked on the failed
+/// write: the process died at exit 101 with a panic line on
+/// stderr, for a command whose work had already succeeded.
+#[cfg(unix)]
+#[test]
+fn cli_show_with_an_unwritable_output_fails_with_a_typed_error() {
+    let base = temp_dir("cli-full-show");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    let shown = run_cli_stdout_full(&store, &["show", "alpha", "1"]);
+    assert_eq!(shown.status, 1, "{}", shown.stderr);
+    assert!(shown.stderr.starts_with("error: "), "{}", shown.stderr);
+    assert!(
+        shown.stderr.contains("cannot be written"),
+        "{}",
+        shown.stderr
+    );
+    assert!(!shown.stderr.contains("panicked"), "{}", shown.stderr);
+}
+
+/// WS-A26: the list loop's prints fail the same typed way,
+/// the whole listing assembled before the one checked write.
+#[cfg(unix)]
+#[test]
+fn cli_list_with_an_unwritable_output_fails_with_a_typed_error() {
+    let base = temp_dir("cli-full-list");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    let listed = run_cli_stdout_full(&store, &["list", "alpha"]);
+    assert_eq!(listed.status, 1, "{}", listed.stderr);
+    assert!(listed.stderr.starts_with("error: "), "{}", listed.stderr);
+    assert!(
+        listed.stderr.contains("cannot be written"),
+        "{}",
+        listed.stderr
+    );
+    assert!(!listed.stderr.contains("panicked"), "{}", listed.stderr);
+}
+
+/// Run the command line with both standard streams
+/// redirected to /dev/full and return the exit status.
+#[cfg(unix)]
+fn run_cli_both_full(args: &[&str]) -> i32 {
+    use std::process::Stdio;
+
+    let out_full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let err_full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_wayside"))
+        .args(args)
+        .stdout(Stdio::from(out_full))
+        .stderr(Stdio::from(err_full))
+        .spawn()
+        .unwrap();
+    child.wait().unwrap().code().unwrap_or(-1)
+}
+
+/// WS-A26, the both streams shape: with stderr also
+/// unwritable, the error line cannot be written at all,
+/// and the typed exit code still carries the failure. On
+/// the code this pin was written against, eprintln!
+/// panicked on the failed stderr write and the command
+/// exited 101.
+#[cfg(unix)]
+#[test]
+fn cli_show_with_both_streams_unwritable_keeps_the_typed_exit() {
+    let base = temp_dir("cli-both-full");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    let status = run_cli_both_full(&["--store", store.to_str().unwrap(), "show", "alpha", "1"]);
+    assert_eq!(status, 1);
 }
