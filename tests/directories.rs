@@ -10,75 +10,28 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
-use sha2::{Digest, Sha256};
 use wayside::{
     checkpoint, checkpoint_with_databases, fork, list_checkpoints, render_manifest, restore,
     rewind, show, verify_checkpoint, Error,
 };
+mod common;
 
-const MEMORY: &[u8] = b"memory one\n";
-
-static COUNTER: AtomicUsize = AtomicUsize::new(0);
+use common::{
+    checkpoint_dir, copy_tree, damage_manifest_json, declare, expect_error, manifest_path,
+    make_state, run_cli, sha256_hex, CliOutput,
+};
 
 fn temp_dir(tag: &str) -> PathBuf {
-    let count = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!(
-        "wayside-dir-test-{}-{tag}-{count}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+    common::temp_dir("wayside-dir-test", tag)
 }
 
-fn sha256_hex(data: &[u8]) -> String {
-    Sha256::digest(data)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
-fn make_state(base: &Path, files: &[(&str, &[u8])]) -> PathBuf {
-    let state = base.to_path_buf();
-    std::fs::create_dir_all(&state).unwrap();
-    for (rel, data) in files {
-        let path = state.join(rel);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, data).unwrap();
-    }
-    state
-}
+const MEMORY: &[u8] = b"memory one\n";
 
 fn make_dirs(state: &Path, dirs: &[&str]) {
     for rel in dirs {
         std::fs::create_dir_all(state.join(rel)).unwrap();
     }
-}
-
-fn checkpoint_dir(store: &Path, session: &str, sequence: i64) -> PathBuf {
-    store
-        .join("sessions")
-        .join(session)
-        .join("checkpoints")
-        .join(format!("{sequence:06}"))
-}
-
-fn manifest_path(store: &Path, session: &str, sequence: i64) -> PathBuf {
-    checkpoint_dir(store, session, sequence).join("manifest.json")
-}
-
-fn expect_error<T>(result: wayside::Result<T>) -> Error {
-    match result {
-        Ok(_) => panic!("the operation succeeded where the pin requires a refusal"),
-        Err(error) => error,
-    }
-}
-
-fn declare(paths: &[&str]) -> Vec<String> {
-    paths.iter().map(|path| path.to_string()).collect()
 }
 
 /// A plain checkpoint with no env pairs and the standing
@@ -143,39 +96,6 @@ fn tree_files(root: &Path) -> BTreeMap<String, Vec<u8>> {
         }
     }
     files
-}
-
-fn damage_manifest_json(
-    store: &Path,
-    session: &str,
-    sequence: i64,
-    damage: &dyn Fn(&mut serde_json::Value),
-) {
-    let path = manifest_path(store, session, sequence);
-    let mut value: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    damage(&mut value);
-    std::fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
-}
-
-struct CliOutput {
-    status: i32,
-    stdout: String,
-    stderr: String,
-}
-
-fn run_cli(store: &Path, args: &[&str]) -> CliOutput {
-    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
-        .arg("--store")
-        .arg(store)
-        .args(args)
-        .output()
-        .unwrap();
-    CliOutput {
-        status: output.status.code().unwrap_or(-1),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-    }
 }
 
 // WS-20 and WS-22, the record and its restore.
@@ -697,19 +617,6 @@ fn cli_checkpoint_restore_round_trip_with_directories() {
 }
 
 // The frozen directories store.
-
-fn copy_tree(from: &Path, to: &Path) {
-    std::fs::create_dir_all(to).unwrap();
-    for entry in std::fs::read_dir(from).unwrap() {
-        let path = entry.unwrap().path();
-        let dest = to.join(path.file_name().unwrap());
-        if path.is_dir() {
-            copy_tree(&path, &dest);
-        } else {
-            std::fs::copy(&path, &dest).unwrap();
-        }
-    }
-}
 
 #[test]
 fn fixture_directories() {
