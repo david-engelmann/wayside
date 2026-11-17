@@ -605,6 +605,53 @@ fn directory_above_a_recorded_file_is_refused() {
     expect_corrupt(&store);
 }
 
+/// WS-A36: a recorded directory standing above a database
+/// member is refused at read. The pin guards the member side
+/// of the directory judgements the first candidate repair
+/// must not move: it passes on the scanning form the repair
+/// replaces and on the repaired form, and fails on a repair
+/// that drops or weakens the member prefix judgement.
+#[test]
+fn directory_above_a_database_member_is_refused() {
+    let base = temp_dir("damage-above-member");
+    let store = base.join("store");
+    let state = make_state(
+        &base.join("state"),
+        &[
+            ("plan.txt", b"first plan\n"),
+            ("data/app.db", b"synthetic database main bytes"),
+        ],
+    );
+    make_dirs(&state, &["spool"]);
+    db_checkpoint(&store, "alpha", &state, &["data/app.db"]).unwrap();
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["directories"] = serde_json::json!(["data"]);
+    });
+    expect_corrupt(&store);
+}
+
+/// WS-A36: a recorded directory path that is also a database
+/// member path is refused at read, the member equality half
+/// of the same judgements, guarded the same way.
+#[test]
+fn directory_equal_to_a_database_member_is_refused() {
+    let base = temp_dir("damage-member-equal");
+    let store = base.join("store");
+    let state = make_state(
+        &base.join("state"),
+        &[
+            ("plan.txt", b"first plan\n"),
+            ("data/app.db", b"synthetic database main bytes"),
+        ],
+    );
+    make_dirs(&state, &["spool"]);
+    db_checkpoint(&store, "alpha", &state, &["data/app.db"]).unwrap();
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["directories"] = serde_json::json!(["data/app.db"]);
+    });
+    expect_corrupt(&store);
+}
+
 #[test]
 fn directory_path_failing_the_recorded_path_rules_is_refused() {
     let (_base, store) = directories_store("damage-unsafe");
