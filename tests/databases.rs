@@ -1648,7 +1648,11 @@ fn verify_names_the_first_damaged_payload_in_reading_order() {
     let error = expect_error(verify_checkpoint(&store, "alpha", 1));
     assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
     assert!(error.message().contains("notes.txt"), "{}", error.message());
-    assert!(!error.message().contains("app.db-wal"), "{}", error.message());
+    assert!(
+        !error.message().contains("app.db-wal"),
+        "{}",
+        error.message()
+    );
 
     let base = temp_dir("verify-first-member");
     let store = base.join("store");
@@ -1672,8 +1676,16 @@ fn verify_names_the_first_damaged_payload_in_reading_order() {
     flip_first_byte(&checkpoint_dir(&store, "alpha", 1).join("files/data/app.db"));
     let error = expect_error(verify_checkpoint(&store, "alpha", 1));
     assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
-    assert!(error.message().contains("data/app.db"), "{}", error.message());
-    assert!(!error.message().contains("memory document"), "{}", error.message());
+    assert!(
+        error.message().contains("data/app.db"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        !error.message().contains("memory document"),
+        "{}",
+        error.message()
+    );
 }
 
 // WS-18, compare.
