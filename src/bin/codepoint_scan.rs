@@ -16,7 +16,9 @@
 //! stand is a scan error at exit 2, where the setup scanner exited
 //! 0 with zero counts. A file that cannot be read is a clean scan
 //! error at exit 2, where the setup scanner let the failure escape
-//! as a traceback at exit 1. One further difference stands for
+//! as a traceback at exit 1. A scan output that cannot be
+//! written is a scan error at exit 2 in the same shape, never
+//! a panic. One further difference stands for
 //! this repo alone: the binary suffix list adds bin, because the
 //! repo holds a recorded binary payload inside its checkpoint
 //! fixtures, and a file with that suffix is binary by the same
@@ -32,6 +34,7 @@
 //! a device, is passed over rather than read, because reading it
 //! can block the scan forever.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -99,11 +102,12 @@ fn collect(root: &Path, out: &mut Vec<PathBuf>) -> Result<(), ScanError> {
     Ok(())
 }
 
-fn scan(root: &Path) -> Result<(usize, usize), ScanError> {
+fn scan(root: &Path) -> Result<(usize, usize, String), ScanError> {
     let mut files = Vec::new();
     collect(root, &mut files)?;
     let mut em_count = 0;
     let mut en_count = 0;
+    let mut lines = String::new();
     for path in &files {
         let bytes = std::fs::read(path)
             .map_err(|err| ScanError(format!("cannot read {}, {err}", path.display())))?;
@@ -113,12 +117,25 @@ fn scan(root: &Path) -> Result<(usize, usize), ScanError> {
         let file_em = text.matches(EM_DASH).count();
         let file_en = text.matches(EN_DASH).count();
         if file_em > 0 || file_en > 0 {
-            println!("{}: em dash {file_em}, en dash {file_en}", path.display());
+            lines.push_str(&format!(
+                "{}: em dash {file_em}, en dash {file_en}\n",
+                path.display()
+            ));
         }
         em_count += file_em;
         en_count += file_en;
     }
-    Ok((em_count, en_count))
+    Ok((em_count, en_count, lines))
+}
+
+/// Write the scan output to standard output, refusing a
+/// failed write as a scan error rather than a panic
+/// (WS-A26).
+fn print_output(text: &str) -> Result<(), ScanError> {
+    let mut out = std::io::stdout().lock();
+    out.write_all(text.as_bytes())
+        .and_then(|()| out.flush())
+        .map_err(|err| ScanError(format!("cannot write the scan output, {err}")))
 }
 
 fn main() -> ExitCode {
@@ -127,9 +144,13 @@ fn main() -> ExitCode {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
     match scan(&root) {
-        Ok((em_count, en_count)) => {
-            println!("em dash U+2014 count {em_count}");
-            println!("en dash U+2013 count {en_count}");
+        Ok((em_count, en_count, lines)) => {
+            let counts =
+                format!("em dash U+2014 count {em_count}\nen dash U+2013 count {en_count}\n");
+            if let Err(ScanError(message)) = print_output(&format!("{lines}{counts}")) {
+                eprintln!("scan error, {message}");
+                return ExitCode::from(2);
+            }
             if em_count > 0 || en_count > 0 {
                 ExitCode::from(1)
             } else {

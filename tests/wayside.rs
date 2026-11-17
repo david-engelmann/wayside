@@ -1979,3 +1979,82 @@ fn manifest_bytes_match_the_python_layout_for_non_ascii_content() {
     // trailing newline both forms carry.
     assert_eq!(format!("{}\n", wayside::render_manifest(&manifest)), stored);
 }
+
+/// WS-A26: run the command line with its standard output
+/// pointed at /dev/full, a device whose every write fails, so
+/// an output failure is staged exactly, with no race against
+/// a closing reader.
+#[cfg(unix)]
+fn run_cli_stdout_full(store: &Path, args: &[&str]) -> CliOutput {
+    use std::io::Read;
+
+    let full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_wayside"))
+        .arg("--store")
+        .arg(store)
+        .args(args)
+        .stdout(std::process::Stdio::from(full))
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    let status = child.wait().unwrap();
+    CliOutput {
+        status: status.code().unwrap_or(-1),
+        stdout: String::new(),
+        stderr,
+    }
+}
+
+/// WS-A26: a command whose result cannot be printed fails
+/// with a typed error, never a panic. On the code this pin
+/// was written against, the show print panicked on the failed
+/// write: the process died at exit 101 with a panic line on
+/// stderr, for a command whose work had already succeeded.
+#[cfg(unix)]
+#[test]
+fn cli_show_with_an_unwritable_output_fails_with_a_typed_error() {
+    let base = temp_dir("cli-full-show");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    let shown = run_cli_stdout_full(&store, &["show", "alpha", "1"]);
+    assert_eq!(shown.status, 1, "{}", shown.stderr);
+    assert!(shown.stderr.starts_with("error: "), "{}", shown.stderr);
+    assert!(
+        shown.stderr.contains("cannot be written"),
+        "{}",
+        shown.stderr
+    );
+    assert!(!shown.stderr.contains("panicked"), "{}", shown.stderr);
+}
+
+/// WS-A26: the list loop's prints fail the same typed way,
+/// the whole listing assembled before the one checked write.
+#[cfg(unix)]
+#[test]
+fn cli_list_with_an_unwritable_output_fails_with_a_typed_error() {
+    let base = temp_dir("cli-full-list");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    let listed = run_cli_stdout_full(&store, &["list", "alpha"]);
+    assert_eq!(listed.status, 1, "{}", listed.stderr);
+    assert!(listed.stderr.starts_with("error: "), "{}", listed.stderr);
+    assert!(
+        listed.stderr.contains("cannot be written"),
+        "{}",
+        listed.stderr
+    );
+    assert!(!listed.stderr.contains("panicked"), "{}", listed.stderr);
+}
+

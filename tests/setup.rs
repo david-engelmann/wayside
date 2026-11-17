@@ -442,3 +442,39 @@ fn codepoint_scan_takes_a_root_whose_name_is_not_unicode() {
     assert!(result.stdout.contains("en dash U+2013 count 0"));
     assert!(!result.stderr.contains("panicked"), "{}", result.stderr);
 }
+
+/// WS-A26: a scan whose output cannot be written is a scan
+/// error at exit 2, never a panic. The pin points the
+/// scanner's standard output at /dev/full, whose every write
+/// fails. On the code this pin was written against, the count
+/// prints panicked and the process died at exit 101.
+#[cfg(unix)]
+#[test]
+fn codepoint_scan_with_an_unwritable_output_is_a_scan_error() {
+    use std::io::Read;
+
+    let dir = temp_dir("full-output");
+    std::fs::write(dir.join("clean.md"), "clean").unwrap();
+    let full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_codepoint_scan"))
+        .arg(&dir)
+        .stdout(std::process::Stdio::from(full))
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    let status = child.wait().unwrap();
+    assert_eq!(status.code().unwrap_or(-1), 2, "{stderr}");
+    assert!(stderr.contains("scan error"), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}
+
