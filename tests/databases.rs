@@ -1756,7 +1756,10 @@ fn an_edited_bundle_digest_verifies_clean_and_compares_different() {
     // Compare judges the pair by the recorded digests, so the
     // two records of one bundle stand Different.
     let comparison = compare_checkpoints(&store, "alpha", 1, 2).unwrap();
-    assert_eq!(comparison.databases[0].standing, DatabaseStanding::Different);
+    assert_eq!(
+        comparison.databases[0].standing,
+        DatabaseStanding::Different
+    );
 }
 
 #[test]
