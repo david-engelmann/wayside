@@ -24,6 +24,7 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use fs2::FileExt;
 use serde::Deserialize;
@@ -121,9 +122,15 @@ type Lister = dyn Fn(&Path) -> io::Result<Vec<PathBuf>> + Send + Sync;
 /// sorted order.
 type WalkedTree = (Vec<(String, Vec<u8>)>, Vec<String>);
 
+/// The lowercase hex rendering of a byte string (WS-A20):
+/// the one statement of the idiom the digests and the
+/// temporary names share.
+fn hex_lowercase(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 fn sha256_hex(data: &[u8]) -> String {
-    let digest = Sha256::digest(data);
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    hex_lowercase(&Sha256::digest(data))
 }
 
 /// Render a string the way Python's repr renders it, for the
@@ -500,6 +507,21 @@ fn value_repr(value: &StrictValue) -> String {
     }
 }
 
+/// Whether a relative path is unsafe inside the state
+/// directory (WS-5): empty, absolute, carrying a backslash or
+/// a NUL, or carrying an empty, dot, or dot dot component.
+/// The one statement of the predicate the recorded path check
+/// and the declared path check share (WS-A19).
+fn path_is_unsafe(rel: &str) -> bool {
+    rel.is_empty()
+        || rel.starts_with('/')
+        || rel.contains('\\')
+        || rel.contains('\0')
+        || rel
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+}
+
 fn validate_recorded_path(rel: &StrictValue, path: &Path) -> Result<String> {
     let text = match rel {
         StrictValue::Str(text) => text.clone(),
@@ -513,14 +535,7 @@ fn validate_recorded_path(rel: &StrictValue, path: &Path) -> Result<String> {
             ))
         }
     };
-    let unsafe_path = text.is_empty()
-        || text.starts_with('/')
-        || text.contains('\\')
-        || text.contains('\0')
-        || text
-            .split('/')
-            .any(|part| part.is_empty() || part == "." || part == "..");
-    if unsafe_path {
+    if path_is_unsafe(&text) {
         return Err(corrupt(
             path,
             &format!(
@@ -540,6 +555,28 @@ fn validate_recorded_path(rel: &StrictValue, path: &Path) -> Result<String> {
         ));
     }
     Ok(text)
+}
+
+/// Whether a recorded path list stands in path order with no
+/// path repeated (WS-A18): the order and uniqueness judgement
+/// the manifest validators share.
+fn paths_in_order_without_repeats(paths: &[String]) -> bool {
+    let mut sorted = paths.to_vec();
+    sorted.sort();
+    if paths != sorted.as_slice() {
+        return false;
+    }
+    sorted.dedup();
+    sorted.len() == paths.len()
+}
+
+/// Whether a recorded path list repeats no path, in any order
+/// (WS-A18).
+fn paths_without_repeats(paths: &[String]) -> bool {
+    let mut sorted = paths.to_vec();
+    sorted.sort();
+    sorted.dedup();
+    sorted.len() == paths.len()
 }
 
 fn validate_hash(value: &StrictValue, path: &Path, what: &str) -> Result<String> {
@@ -740,21 +777,13 @@ fn validate_databases(
             members,
         });
     }
-    let mut sorted = database_paths.clone();
-    sorted.sort();
-    let mut deduped = database_paths.clone();
-    deduped.sort();
-    deduped.dedup();
-    if database_paths != sorted || deduped.len() != database_paths.len() {
+    if !paths_in_order_without_repeats(&database_paths) {
         return Err(corrupt(
             path,
             "the database entries are not in path order or repeat a path",
         ));
     }
-    let mut recorded_sorted = recorded_paths.clone();
-    recorded_sorted.sort();
-    recorded_sorted.dedup();
-    if recorded_sorted.len() != recorded_paths.len() {
+    if !paths_without_repeats(&recorded_paths) {
         return Err(corrupt(path, "the database entries repeat a path"));
     }
     let file_path_set: BTreeSet<&str> = file_paths.iter().map(String::as_str).collect();
@@ -800,12 +829,7 @@ fn validate_directories(
     for item in items {
         directories.push(validate_recorded_path(item, path)?);
     }
-    let mut sorted = directories.clone();
-    sorted.sort();
-    let mut deduped = directories.clone();
-    deduped.sort();
-    deduped.dedup();
-    if directories != sorted || deduped.len() != directories.len() {
+    if !paths_in_order_without_repeats(&directories) {
         return Err(corrupt(
             path,
             "the directory entries are not in path order or repeat a path",
@@ -993,12 +1017,7 @@ fn validate_manifest(
             size,
         });
     }
-    let mut sorted = seen.clone();
-    sorted.sort();
-    let mut deduped = seen.clone();
-    deduped.sort();
-    deduped.dedup();
-    if seen != sorted || deduped.len() != seen.len() {
+    if !paths_in_order_without_repeats(&seen) {
         return Err(corrupt(
             path,
             "the file entries are not in path order or repeat a path",
@@ -1141,66 +1160,33 @@ fn render_env_object(env: &BTreeMap<String, String>, level: usize, out: &mut Str
     out.push('}');
 }
 
-fn render_files_array(files: &[FileEntry], level: usize, out: &mut String) {
-    if files.is_empty() {
+/// Render one recorded entries array, the files of a manifest
+/// or the members of one database, whose entries all carry a
+/// path, a hash, and a size in that key order (WS-A17).
+fn render_entries_array(entries: &[(&str, &str, i128)], level: usize, out: &mut String) {
+    if entries.is_empty() {
         out.push_str("[]");
         return;
     }
     out.push_str("[\n");
-    let count = files.len();
-    for (index, entry) in files.iter().enumerate() {
+    let count = entries.len();
+    for (index, entry) in entries.iter().enumerate() {
         write_indent(out, level + 1);
         out.push_str("{\n");
         write_indent(out, level + 2);
         escape_json_string("path", out);
         out.push_str(": ");
-        escape_json_string(&entry.path, out);
+        escape_json_string(entry.0, out);
         out.push_str(",\n");
         write_indent(out, level + 2);
         escape_json_string("sha256", out);
         out.push_str(": ");
-        escape_json_string(&entry.sha256, out);
+        escape_json_string(entry.1, out);
         out.push_str(",\n");
         write_indent(out, level + 2);
         escape_json_string("size", out);
         out.push_str(": ");
-        out.push_str(&entry.size.to_string());
-        out.push('\n');
-        write_indent(out, level + 1);
-        out.push('}');
-        if index + 1 < count {
-            out.push(',');
-        }
-        out.push('\n');
-    }
-    write_indent(out, level);
-    out.push(']');
-}
-
-fn render_members_array(members: &[DatabaseMember], level: usize, out: &mut String) {
-    if members.is_empty() {
-        out.push_str("[]");
-        return;
-    }
-    out.push_str("[\n");
-    let count = members.len();
-    for (index, member) in members.iter().enumerate() {
-        write_indent(out, level + 1);
-        out.push_str("{\n");
-        write_indent(out, level + 2);
-        escape_json_string("path", out);
-        out.push_str(": ");
-        escape_json_string(&member.path, out);
-        out.push_str(",\n");
-        write_indent(out, level + 2);
-        escape_json_string("sha256", out);
-        out.push_str(": ");
-        escape_json_string(&member.sha256, out);
-        out.push_str(",\n");
-        write_indent(out, level + 2);
-        escape_json_string("size", out);
-        out.push_str(": ");
-        out.push_str(&member.size.to_string());
+        out.push_str(&entry.2.to_string());
         out.push('\n');
         write_indent(out, level + 1);
         out.push('}');
@@ -1231,7 +1217,15 @@ fn render_databases_array(databases: &[DatabaseEntry], level: usize, out: &mut S
         write_indent(out, level + 2);
         escape_json_string("members", out);
         out.push_str(": ");
-        render_members_array(&entry.members, level + 2, out);
+        render_entries_array(
+            &entry
+                .members
+                .iter()
+                .map(|member| (member.path.as_str(), member.sha256.as_str(), member.size))
+                .collect::<Vec<_>>(),
+            level + 2,
+            out,
+        );
         out.push_str(",\n");
         write_indent(out, level + 2);
         escape_json_string("path", out);
@@ -1333,7 +1327,15 @@ pub fn render_manifest(manifest: &Manifest) -> String {
     write_indent(&mut field, 1);
     escape_json_string("files", &mut field);
     field.push_str(": ");
-    render_files_array(&manifest.files, 1, &mut field);
+    render_entries_array(
+        &manifest
+            .files
+            .iter()
+            .map(|entry| (entry.path.as_str(), entry.sha256.as_str(), entry.size))
+            .collect::<Vec<_>>(),
+        1,
+        &mut field,
+    );
     fields.push(field);
 
     if let Some(fork) = &manifest.forked_from {
@@ -2131,11 +2133,19 @@ fn temporary_hex() -> String {
             for (index, byte) in bytes.iter_mut().enumerate() {
                 *byte = (nanos >> ((index % 8) * 8)) as u8 ^ (index as u8).wrapping_mul(37);
             }
+            // The fallback name also carries the process id and
+            // a counter that never repeats inside the process,
+            // so two names derived in the same process differ
+            // even at a frozen clock (WS-A7).
+            bytes[8..12].copy_from_slice(&std::process::id().to_le_bytes());
+            static FALLBACK_COUNTER: AtomicU64 = AtomicU64::new(0);
+            let count = FALLBACK_COUNTER.fetch_add(1, Ordering::SeqCst);
+            bytes[12..16].copy_from_slice(&(count as u32).to_le_bytes());
         }
     }
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    hex_lowercase(&bytes)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2181,14 +2191,7 @@ fn new_manifest(
 /// path rules of WS-5 and the reservation of WS-1, as a caller
 /// error naming the path and the reason (WS-11).
 fn validate_declared_path(rel: &str) -> Result<()> {
-    let unsafe_path = rel.is_empty()
-        || rel.starts_with('/')
-        || rel.contains('\\')
-        || rel.contains('\0')
-        || rel
-            .split('/')
-            .any(|part| part.is_empty() || part == "." || part == "..");
-    if unsafe_path {
+    if path_is_unsafe(rel) {
         return Err(Error::wayside(format!(
             "the declared database path {} is not a safe relative path \
              inside the state directory",
@@ -2435,7 +2438,7 @@ fn checkpoint_inner(
             state_dir.display()
         )));
     }
-    let (walked, walked_directories) = read_state_tree(state_dir, reader)?;
+    let (mut walked, walked_directories) = read_state_tree(state_dir, reader)?;
     // Standing and bound validation against the walked list:
     // each declared path must name a regular file the walk
     // read, and the standing members of each bundle must sum
@@ -2464,6 +2467,20 @@ fn checkpoint_inner(
             return Err(bound_error(rel));
         }
         shm_paths.insert(format!("{rel}-shm"));
+    }
+    // The walked copies of the bundle member bytes and of the
+    // -shm companions are never read again. The two pass proof
+    // below reads every member fresh from the state tree, and
+    // the payload set built after the proof drops both kinds
+    // from the walked list unexamined. The validation above
+    // has already taken every length it needs from them, so
+    // their buffers are released here, before the lock, and a
+    // capture's peak no longer holds the walked copy of a
+    // bundle beside the two readings of its proof (WS-A4).
+    for (rel, data) in &mut walked {
+        if member_paths.contains(rel) || shm_paths.contains(rel) {
+            *data = Vec::new();
+        }
     }
     let _lock = locked(store)?;
     check_session_links(store, session)?;
@@ -2542,11 +2559,7 @@ fn checkpoint_inner(
             }
             DatabaseEntry {
                 path: rel.clone(),
-                bundle_sha256: hasher
-                    .finalize()
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect(),
+                bundle_sha256: hex_lowercase(&hasher.finalize()),
                 members: members
                     .iter()
                     .zip(hashes.iter())
