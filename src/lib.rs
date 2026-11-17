@@ -1141,66 +1141,33 @@ fn render_env_object(env: &BTreeMap<String, String>, level: usize, out: &mut Str
     out.push('}');
 }
 
-fn render_files_array(files: &[FileEntry], level: usize, out: &mut String) {
-    if files.is_empty() {
+/// Render one recorded entries array, the files of a manifest
+/// or the members of one database, whose entries all carry a
+/// path, a hash, and a size in that key order (WS-A17).
+fn render_entries_array(entries: &[(&str, &str, i128)], level: usize, out: &mut String) {
+    if entries.is_empty() {
         out.push_str("[]");
         return;
     }
     out.push_str("[\n");
-    let count = files.len();
-    for (index, entry) in files.iter().enumerate() {
+    let count = entries.len();
+    for (index, entry) in entries.iter().enumerate() {
         write_indent(out, level + 1);
         out.push_str("{\n");
         write_indent(out, level + 2);
         escape_json_string("path", out);
         out.push_str(": ");
-        escape_json_string(&entry.path, out);
+        escape_json_string(entry.0, out);
         out.push_str(",\n");
         write_indent(out, level + 2);
         escape_json_string("sha256", out);
         out.push_str(": ");
-        escape_json_string(&entry.sha256, out);
+        escape_json_string(entry.1, out);
         out.push_str(",\n");
         write_indent(out, level + 2);
         escape_json_string("size", out);
         out.push_str(": ");
-        out.push_str(&entry.size.to_string());
-        out.push('\n');
-        write_indent(out, level + 1);
-        out.push('}');
-        if index + 1 < count {
-            out.push(',');
-        }
-        out.push('\n');
-    }
-    write_indent(out, level);
-    out.push(']');
-}
-
-fn render_members_array(members: &[DatabaseMember], level: usize, out: &mut String) {
-    if members.is_empty() {
-        out.push_str("[]");
-        return;
-    }
-    out.push_str("[\n");
-    let count = members.len();
-    for (index, member) in members.iter().enumerate() {
-        write_indent(out, level + 1);
-        out.push_str("{\n");
-        write_indent(out, level + 2);
-        escape_json_string("path", out);
-        out.push_str(": ");
-        escape_json_string(&member.path, out);
-        out.push_str(",\n");
-        write_indent(out, level + 2);
-        escape_json_string("sha256", out);
-        out.push_str(": ");
-        escape_json_string(&member.sha256, out);
-        out.push_str(",\n");
-        write_indent(out, level + 2);
-        escape_json_string("size", out);
-        out.push_str(": ");
-        out.push_str(&member.size.to_string());
+        out.push_str(&entry.2.to_string());
         out.push('\n');
         write_indent(out, level + 1);
         out.push('}');
@@ -1231,7 +1198,15 @@ fn render_databases_array(databases: &[DatabaseEntry], level: usize, out: &mut S
         write_indent(out, level + 2);
         escape_json_string("members", out);
         out.push_str(": ");
-        render_members_array(&entry.members, level + 2, out);
+        render_entries_array(
+            &entry
+                .members
+                .iter()
+                .map(|member| (member.path.as_str(), member.sha256.as_str(), member.size))
+                .collect::<Vec<_>>(),
+            level + 2,
+            out,
+        );
         out.push_str(",\n");
         write_indent(out, level + 2);
         escape_json_string("path", out);
@@ -1333,7 +1308,15 @@ pub fn render_manifest(manifest: &Manifest) -> String {
     write_indent(&mut field, 1);
     escape_json_string("files", &mut field);
     field.push_str(": ");
-    render_files_array(&manifest.files, 1, &mut field);
+    render_entries_array(
+        &manifest
+            .files
+            .iter()
+            .map(|entry| (entry.path.as_str(), entry.sha256.as_str(), entry.size))
+            .collect::<Vec<_>>(),
+        1,
+        &mut field,
+    );
     fields.push(field);
 
     if let Some(fork) = &manifest.forked_from {
