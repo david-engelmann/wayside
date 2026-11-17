@@ -381,7 +381,19 @@ fn report_error(error: &Error) -> ExitCode {
 }
 
 fn run() -> ExitCode {
-    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let mut argv: Vec<String> = Vec::new();
+    for (index, argument) in std::env::args_os().skip(1).enumerate() {
+        match argument.into_string() {
+            Ok(argument) => argv.push(argument),
+            Err(_) => {
+                return parser_fail(
+                    MAIN_USAGE,
+                    "wayside",
+                    &format!("argument {} is not valid Unicode", index + 1),
+                );
+            }
+        }
+    }
     match dispatch(&argv) {
         Ok(code) => code,
         Err(error) => report_error(&error),

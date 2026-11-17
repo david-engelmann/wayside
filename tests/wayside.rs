@@ -1134,6 +1134,34 @@ fn cli_refuses_an_unsafe_session_id_without_a_traceback() {
     assert!(!base.join("escape").exists());
 }
 
+/// WS-A13: an argument that is not valid Unicode meets the
+/// binary's clean refusal surface, one error line at exit 2
+/// naming the argument by its position, not a panic. On the
+/// code this pin was written against, collecting the argument
+/// vector through std::env::args panicked on this argument.
+#[cfg(unix)]
+#[test]
+fn cli_refuses_a_non_unicode_argument_without_a_panic() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let base = temp_dir("cli-non-unicode");
+    let store = base.join("store");
+    let bad = std::ffi::OsString::from_vec(vec![b'l', 0xff, b's', b't']);
+    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
+        .arg("--store")
+        .arg(&store)
+        .arg(bad)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(output.status.code().unwrap_or(-1), 2, "{stderr}");
+    assert!(
+        stderr.contains("argument 3 is not valid Unicode"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}
+
 #[test]
 fn checkpoint_refuses_a_symlinked_session_directory() {
     let base = temp_dir("write-link-session");
