@@ -421,3 +421,24 @@ fn codepoint_scan_passes_over_a_pipe_instead_of_reading_it() {
     assert!(result.stdout.contains("em dash U+2014 count 0"));
     assert!(result.stdout.contains("en dash U+2013 count 0"));
 }
+
+/// WS-A15: the scanner takes its root as a path, never as
+/// text, so a root whose name is not valid Unicode scans
+/// like any other. On the code this pin was written
+/// against, the root was taken through std::env::args and
+/// the scanner panicked on this root before scanning.
+#[cfg(unix)]
+#[test]
+fn codepoint_scan_takes_a_root_whose_name_is_not_unicode() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let base = temp_dir("non-unicode-root");
+    let root = base.join(std::ffi::OsStr::from_bytes(b"scan-\xff-root"));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("clean.md"), "clean").unwrap();
+    let result = scan_tree(&root);
+    assert_eq!(result.status, 0, "{}", result.stderr);
+    assert!(result.stdout.contains("em dash U+2014 count 0"));
+    assert!(result.stdout.contains("en dash U+2013 count 0"));
+    assert!(!result.stderr.contains("panicked"), "{}", result.stderr);
+}
