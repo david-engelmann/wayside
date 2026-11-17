@@ -156,7 +156,7 @@ pub fn py_repr(text: &str) -> String {
                 out.push('\\');
                 out.push(c);
             }
-            c if (c as u32) < 0x20 || (c as u32) == 0x7f => {
+            c if (c as u32) < 0x20 || (0x7f..=0x9f).contains(&(c as u32)) => {
                 let n = c as u32;
                 if n <= 0xff {
                     out.push_str(&format!("\\x{n:02x}"));

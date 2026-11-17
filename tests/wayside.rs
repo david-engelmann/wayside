@@ -2270,3 +2270,37 @@ fn checkpoint_refuses_a_backslash_name_colliding_with_a_nested_path() {
     let manifest = checkpoint(&store, "alpha", &clean, None, b"").unwrap();
     assert_eq!(manifest.sequence, 1);
 }
+// WS-A44, the C1 control characters in py_repr's rendering.
+
+/// WS-A44: py_repr renders the C1 control characters as hex
+/// escapes, as its doc promises for every control character.
+/// On the code this pin was written against, the escape arm
+/// covered the C0 range and DEL only, so U+0085 stood in the
+/// rendered text as the raw control character.
+#[test]
+fn py_repr_escapes_the_c1_control_characters() {
+    assert_eq!(wayside::py_repr("a\u{85}b"), "'a\\x85b'");
+    assert_eq!(wayside::py_repr("\u{80}\u{9f}"), "'\\x80\\x9f'");
+}
+
+/// WS-A44: a session id carrying a C1 control character is
+/// refused with the character escaped in the message, never
+/// raw. On the code this pin was written against, the
+/// InvalidName message carried the raw U+0085 byte.
+#[test]
+fn session_id_carrying_a_c1_control_is_refused_with_the_escape_in_the_message() {
+    let base = temp_dir("c1-session-id");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    let error = expect_error(checkpoint(&store, "bad\u{85}id", &state, None, b""));
+    assert!(matches!(error, Error::InvalidName(_)), "{error:?}");
+    assert!(error.message().contains("\\x85"), "{}", error.message());
+    assert!(
+        !error
+            .message()
+            .chars()
+            .any(|c| ('\u{80}'..='\u{9f}').contains(&c)),
+        "{}",
+        error.message()
+    );
+}
