@@ -1954,7 +1954,10 @@ impl Default for StateTreeReader {
 /// sorted by path, beside the files. Symbolic links and non
 /// regular files are refused, because a link can name bytes
 /// outside the state directory and a checkpoint records only
-/// what the caller can see in the tree itself. A directory
+/// what the caller can see in the tree itself. An entry whose
+/// name is not valid UTF-8 is refused too, because the record
+/// carries names as text, and a name the record cannot carry
+/// exactly it does not carry at all (WS-A27). A directory
 /// that cannot be listed fails the read, naming that
 /// directory, instead of publishing a partial tree as if it
 /// were complete.
@@ -1983,6 +1986,22 @@ fn read_state_dir(
     let mut dirs: Vec<PathBuf> = Vec::new();
     let mut files: Vec<PathBuf> = Vec::new();
     for path in listed {
+        // A name that is not valid UTF-8 cannot be recorded:
+        // rel_of renders it lossily, so it would stand in the
+        // record under a mangled rendering and be restored
+        // under that rendering, silently, and two names
+        // mangling to one rendering would publish a manifest
+        // repeating a path, which every later read refuses as
+        // corrupt (WS-A27). Refuse the entry here, in the
+        // family of the link and non regular file refusals
+        // below.
+        if path.file_name().is_some_and(|name| name.to_str().is_none()) {
+            return Err(Error::wayside(format!(
+                "the state directory at {} holds an entry whose name is \
+                 not valid UTF-8 text, which a checkpoint does not record",
+                dir.display()
+            )));
+        }
         if fs::metadata(&path)
             .map(|meta| meta.is_dir())
             .unwrap_or(false)

@@ -4,13 +4,17 @@
 //! Every command names the store first. Errors the store
 //! raises are printed as one line on stderr with the exit code
 //! the error carries, and no traceback is ever printed for
-//! them. The argument parser mirrors the Python argparse
+//! them. Command output is written through a checked writer,
+//! and a write that fails, a closed pipe or a full device, is
+//! reported the same way, as one error line at exit 1, never
+//! as a panic (WS-A26). The argument parser mirrors the Python argparse
 //! surface of the Round 1 command line: the same usage texts,
 //! the same parser error messages at exit 2, unambiguous
 //! prefix abbreviations of long options, the equals form, and
 //! parser extras reported by the top level parser.
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -180,9 +184,7 @@ fn parse_sub(
             continue;
         }
         if !after_separator && (token == "-h" || token == "--help") {
-            print!("{}", sub_help(command));
-            println!();
-            std::process::exit(0);
+            exit_after_print(&format!("{}\n", sub_help(command)));
         }
         if !after_separator && token.starts_with("--") && token.len() > 2 {
             let (name, inline_value) = match token.find('=') {
@@ -191,9 +193,7 @@ fn parse_sub(
             };
             match resolve_long(name, &candidates) {
                 Ok(Some("--help")) => {
-                    print!("{}", sub_help(command));
-                    println!();
-                    std::process::exit(0);
+                    exit_after_print(&format!("{}\n", sub_help(command)));
                 }
                 Ok(Some(option)) => {
                     if let Some(value) = inline_value {
@@ -376,8 +376,39 @@ fn read_memory(path: Option<&str>) -> Result<Vec<u8>, Error> {
 }
 
 fn report_error(error: &Error) -> ExitCode {
-    eprintln!("error: {}", error.message());
+    // The error line is written fallibly: when stderr itself
+    // cannot be written there is no channel left to report
+    // through, and the exit code still carries the failure
+    // (WS-A26).
+    let mut err_out = std::io::stderr();
+    let _ = writeln!(err_out, "error: {}", error.message());
     ExitCode::from(error.exit_code() as u8)
+}
+
+/// Write one block of command output to standard output. A
+/// failed write is a typed error at exit 1, reported the way a
+/// store refusal is reported, so a closed pipe or a full
+/// output device never ends a command whose work has already
+/// succeeded in a panic (WS-A26).
+fn print_output(text: &str) -> Result<(), Error> {
+    let mut out = std::io::stdout().lock();
+    out.write_all(text.as_bytes())
+        .and_then(|()| out.flush())
+        .map_err(|exc| Error::Wayside(format!("the command output cannot be written, {exc}")))
+}
+
+/// Print a help text and exit: exit 0 when the text is
+/// written, and the error's own exit code with the error line
+/// on stderr when it cannot be (WS-A26).
+fn exit_after_print(text: &str) -> ! {
+    match print_output(text) {
+        Ok(()) => std::process::exit(0),
+        Err(error) => {
+            let mut err_out = std::io::stderr();
+            let _ = writeln!(err_out, "error: {}", error.message());
+            std::process::exit(error.exit_code());
+        }
+    }
 }
 
 fn run() -> ExitCode {
@@ -411,7 +442,7 @@ fn dispatch(argv: &[String]) -> Result<ExitCode, Error> {
     while index < argv.len() {
         let token = &argv[index];
         if token == "-h" || token == "--help" {
-            println!("{MAIN_HELP}");
+            print_output(&format!("{MAIN_HELP}\n"))?;
             return Ok(ExitCode::from(0));
         }
         if token.starts_with("--") && token.len() > 2 {
@@ -421,7 +452,7 @@ fn dispatch(argv: &[String]) -> Result<ExitCode, Error> {
             };
             match resolve_long(name, &["--store", "--help"]) {
                 Ok(Some("--help")) => {
-                    println!("{MAIN_HELP}");
+                    print_output(&format!("{MAIN_HELP}\n"))?;
                     return Ok(ExitCode::from(0));
                 }
                 Ok(Some("--store")) => {
@@ -562,75 +593,88 @@ fn dispatch(argv: &[String]) -> Result<ExitCode, Error> {
                 &memory,
                 &databases,
             )?;
-            println!(
-                "session {} checkpoint {}",
+            print_output(&format!(
+                "session {} checkpoint {}\n",
                 manifest.session, manifest.sequence
-            );
+            ))?;
         }
         "restore" => {
             let sequence = sequence_arg(&args.positionals[1])?;
             let target = option_value(&args, "--target").unwrap();
             wayside::restore(&store, &session, sequence, Path::new(target))?;
-            println!("restored session {session} checkpoint {sequence} to {target}");
+            print_output(&format!(
+                "restored session {session} checkpoint {sequence} to {target}\n"
+            ))?;
         }
         "rewind" => {
             let sequence = sequence_arg(&args.positionals[1])?;
             let target = option_value(&args, "--target").unwrap();
             wayside::rewind(&store, &session, sequence, Path::new(target))?;
-            println!("rewound session {session} to checkpoint {sequence} at {target}");
+            print_output(&format!(
+                "rewound session {session} to checkpoint {sequence} at {target}\n"
+            ))?;
         }
         "fork" => {
             let sequence = sequence_arg(&args.positionals[1])?;
             let new_session = args.positionals[2].clone();
             let manifest = wayside::fork(&store, &session, sequence, &new_session)?;
-            println!(
-                "forked session {session} checkpoint {sequence} to session {} checkpoint 1",
+            print_output(&format!(
+                "forked session {session} checkpoint {sequence} to session {} checkpoint 1\n",
                 manifest.session
-            );
+            ))?;
         }
         "list" => {
+            let mut text = String::new();
             for entry in wayside::list_checkpoints(&store, &session)? {
-                println!("{} {}", entry.sequence, entry.created_at);
+                text.push_str(&format!("{} {}\n", entry.sequence, entry.created_at));
             }
+            print_output(&text)?;
         }
         "verify" => {
             let sequence = sequence_arg(&args.positionals[1])?;
             wayside::verify_checkpoint(&store, &session, sequence)?;
-            println!("verified session {session} checkpoint {sequence}");
+            print_output(&format!(
+                "verified session {session} checkpoint {sequence}\n"
+            ))?;
         }
         "compare" => {
             let first = sequence_arg(&args.positionals[1])?;
             let second = sequence_arg(&args.positionals[2])?;
             let comparison = wayside::compare_checkpoints(&store, &session, first, second)?;
+            let mut text = String::new();
             for entry in &comparison.databases {
                 match entry.standing {
                     wayside::DatabaseStanding::Equal => {
-                        println!("{} equal", entry.path)
+                        text.push_str(&format!("{} equal\n", entry.path))
                     }
                     wayside::DatabaseStanding::Different => {
-                        println!("{} different", entry.path)
+                        text.push_str(&format!("{} different\n", entry.path))
                     }
-                    wayside::DatabaseStanding::OnlyFirst => {
-                        println!("{} recorded on checkpoint {first} only", entry.path)
-                    }
-                    wayside::DatabaseStanding::OnlySecond => {
-                        println!("{} recorded on checkpoint {second} only", entry.path)
-                    }
+                    wayside::DatabaseStanding::OnlyFirst => text.push_str(&format!(
+                        "{} recorded on checkpoint {first} only\n",
+                        entry.path
+                    )),
+                    wayside::DatabaseStanding::OnlySecond => text.push_str(&format!(
+                        "{} recorded on checkpoint {second} only\n",
+                        entry.path
+                    )),
                 }
             }
+            print_output(&text)?;
         }
         _ => {
             let sequence = sequence_arg(&args.positionals[1])?;
             let manifest = wayside::show(&store, &session, sequence)?;
-            println!("{}", wayside::render_manifest(&manifest));
+            print_output(&format!("{}\n", wayside::render_manifest(&manifest)))?;
         }
     }
     Ok(ExitCode::from(0))
 }
 
 fn parser_fail(usage: &str, prog: &str, message: &str) -> ExitCode {
-    eprintln!("{usage}");
-    eprintln!("{prog}: error: {message}");
+    let mut err_out = std::io::stderr();
+    let _ = writeln!(err_out, "{usage}");
+    let _ = writeln!(err_out, "{prog}: error: {message}");
     ExitCode::from(2)
 }
 
