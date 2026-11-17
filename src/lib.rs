@@ -2562,11 +2562,21 @@ fn place(
         )));
     }
     if target.is_dir() {
-        if let Ok(mut read) = fs::read_dir(target) {
-            if read.next().is_some() {
+        match fs::read_dir(target) {
+            Ok(mut read) => {
+                if read.next().is_some() {
+                    return Err(Error::Target(format!(
+                        "the restore target at {} is not empty, \
+                         and restore never overwrites a non empty directory",
+                        target.display()
+                    )));
+                }
+            }
+            Err(exc) => {
                 return Err(Error::Target(format!(
-                    "the restore target at {} is not empty, \
-                     and restore never overwrites a non empty directory",
+                    "the restore target at {} cannot be listed, \
+                     and restore never writes into a directory it \
+                     cannot show is empty, {exc}",
                     target.display()
                 )));
             }

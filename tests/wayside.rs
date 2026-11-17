@@ -460,6 +460,76 @@ fn restore_refuses_a_non_empty_target_and_leaves_it_untouched() {
     assert_eq!(hash_tree(&target), expected);
 }
 
+/// WS-A2: a populated target whose listing fails is refused
+/// before a byte is placed. The shape is the one the Round 2
+/// probe ran against the frozen implementation: the target
+/// stands at mode 300, write and execute without read, so
+/// placement would succeed if it were attempted, and the
+/// restore runs as user nobody when the suite runs as root,
+/// so the permission bits bind the listing. On the code this
+/// pin was written against, the failed listing was skipped
+/// and the restore placed the checkpoint beside the sentinel.
+#[cfg(unix)]
+#[test]
+fn restore_refuses_a_populated_target_it_cannot_list() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::process::CommandExt;
+
+    let base = temp_dir("restore-unlistable");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    // The restore reads the store as the unprivileged user,
+    // so open the staged tree up explicitly, whatever the
+    // umask the suite runs under, and let that user open the
+    // store lock for writing.
+    let as_root = unsafe { libc::getuid() } == 0;
+    let mut stack = vec![base.clone()];
+    while let Some(dir) = stack.pop() {
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.file_name().to_string_lossy() == "wayside.lock" {
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
+            } else {
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            }
+        }
+    }
+    let target = base.join("target");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(target.join("sentinel.txt"), b"do not touch").unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o300)).unwrap();
+    if as_root {
+        let c_target = std::ffi::CString::new(target.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::chown(c_target.as_ptr(), 65534, 65534) }, 0);
+    }
+    let mut command = Command::new(env!("CARGO_BIN_EXE_wayside"));
+    command
+        .arg("--store")
+        .arg(&store)
+        .arg("restore")
+        .arg("--target")
+        .arg(&target)
+        .arg("alpha")
+        .arg("1");
+    if as_root {
+        command.uid(65534).gid(65534);
+    }
+    let output = command.output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(output.status.code().unwrap_or(-1), 2, "{stderr}");
+    assert!(stderr.contains("cannot be listed"), "{stderr}");
+    // Open the listing back up so the staged tree can be read
+    // and cleaned up, then prove nothing was placed.
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut expected = BTreeMap::new();
+    expected.insert("sentinel.txt".to_string(), sha256_hex(b"do not touch"));
+    assert_eq!(hash_tree(&target), expected);
+}
+
 #[test]
 fn restore_refuses_a_file_at_the_target_path() {
     let base = temp_dir("restore-file-target");
