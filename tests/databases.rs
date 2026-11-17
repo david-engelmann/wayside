@@ -1044,11 +1044,7 @@ fn hand_built_both_empty_v2_manifest_renders_as_format_1() {
     let store = base.join("store");
     let state = make_state(&base.join("state"), &[("notes.txt", b"plain bytes")]);
     checkpoint(&store, "alpha", &state, None, b"").unwrap();
-    std::fs::write(
-        manifest_path(&store, "alpha", 1),
-        format!("{rendered}\n"),
-    )
-    .unwrap();
+    std::fs::write(manifest_path(&store, "alpha", 1), format!("{rendered}\n")).unwrap();
     let shown = show(&store, "alpha", 1).unwrap();
     assert_eq!(shown, build("wayside-checkpoint/1"));
 }
