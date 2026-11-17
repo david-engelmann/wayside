@@ -1749,7 +1749,7 @@ fn an_edited_bundle_digest_verifies_clean_and_compares_different() {
     // The edited record reads back as the record, and verify
     // returns it clean, its payload untouched and its digest
     // taken as recorded.
-    let shown = show(&store, "alpha", Some(1)).unwrap();
+    let shown = show(&store, "alpha", 1).unwrap();
     assert_eq!(shown.databases[0].bundle_sha256, edited);
     let verified = verify_checkpoint(&store, "alpha", 1).unwrap();
     assert_eq!(verified.databases[0].bundle_sha256, edited);
