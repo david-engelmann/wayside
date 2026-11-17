@@ -2053,6 +2053,24 @@ fn read_state_dir(
     Ok(())
 }
 
+/// Write each entry under a root, creating the parent
+/// directories of each recorded path (WS-A21): the write
+/// loop publish and place share, splitting each path on its
+/// separators and pushing the parts onto the root.
+fn write_entries(root: &Path, entries: &[(String, Vec<u8>)]) -> io::Result<()> {
+    for (rel, data) in entries {
+        let mut dest = root.to_path_buf();
+        for part in rel.split('/') {
+            dest.push(part);
+        }
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&dest, data)?;
+    }
+    Ok(())
+}
+
 /// Assemble a checkpoint under a temporary name and rename it
 /// into place.
 fn publish(
@@ -2080,16 +2098,7 @@ fn publish(
     let tmp = ck_dir.join(format!(".tmp-{}", temporary_hex()));
     let assembled = (|| -> io::Result<()> {
         fs::create_dir_all(tmp.join(FILES_NAME))?;
-        for (rel, data) in entries {
-            let mut dest = tmp.join(FILES_NAME);
-            for part in rel.split('/') {
-                dest.push(part);
-            }
-            if let Some(parent) = dest.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::write(&dest, data)?;
-        }
+        write_entries(&tmp.join(FILES_NAME), entries)?;
         fs::write(tmp.join(MEMORY_NAME), memory)?;
         fs::write(
             tmp.join(MANIFEST_NAME),
@@ -2615,16 +2624,7 @@ fn place(
     }
     let placed = (|| -> io::Result<()> {
         fs::create_dir_all(target)?;
-        for (rel, data) in entries {
-            let mut dest = target.to_path_buf();
-            for part in rel.split('/') {
-                dest.push(part);
-            }
-            if let Some(parent) = dest.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::write(&dest, data)?;
-        }
+        write_entries(target, entries)?;
         fs::write(target.join(MEMORY_FILE_NAME), memory)?;
         fs::write(target.join(ENV_FILE_NAME), env_text(&manifest.env))?;
         for directory in &manifest.directories {
