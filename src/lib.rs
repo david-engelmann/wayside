@@ -377,7 +377,7 @@ fn duplicate_key_of(error_text: &str) -> Option<String> {
     let marker = "wayside-duplicate-key\x1f";
     let start = error_text.find(marker)? + marker.len();
     let rest = &error_text[start..];
-    let end = rest.find(" at line ").unwrap_or(rest.len());
+    let end = rest.rfind(" at line ").unwrap_or(rest.len());
     Some(rest[..end].to_string())
 }
 
