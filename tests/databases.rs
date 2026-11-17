@@ -1004,6 +1004,55 @@ fn v2_manifest_bytes_match_the_recorded_layout() {
     assert_eq!(format!("{}\n", wayside::render_manifest(&manifest)), stored);
 }
 
+#[test]
+fn hand_built_both_empty_v2_manifest_renders_as_format_1() {
+    // WS-21 writes a checkpoint as /2 exactly when it declares
+    // a database or records a directory, and as /1 otherwise,
+    // so the renderer renders a hand built /2 value with both
+    // lists empty as the /1 rendering of the same value, the
+    // only rendering of that content the reader accepts.
+    let build = |format: &str| wayside::Manifest {
+        format: format.to_string(),
+        session: "alpha".to_string(),
+        sequence: 1,
+        created_at: "2026-11-02T10:00:00+00:00".to_string(),
+        env: BTreeMap::new(),
+        memory: wayside::MemoryEntry {
+            sha256: EMPTY_SHA256.to_string(),
+            size: 0,
+        },
+        files: Vec::new(),
+        databases: Vec::new(),
+        directories: Vec::new(),
+        forked_from: None,
+    };
+    let rendered = wayside::render_manifest(&build("wayside-checkpoint/2"));
+    assert_eq!(
+        rendered,
+        wayside::render_manifest(&build("wayside-checkpoint/1"))
+    );
+    assert!(
+        rendered.contains("\"format\": \"wayside-checkpoint/1\""),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("\"databases\""), "{rendered}");
+    assert!(!rendered.contains("\"directories\""), "{rendered}");
+    // And the rendered bytes are ones the reader accepts:
+    // staged as the manifest of a real checkpoint directory,
+    // they read back as the /1 manifest of the same content.
+    let base = temp_dir("render-both-empty");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("notes.txt", b"plain bytes")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    std::fs::write(
+        manifest_path(&store, "alpha", 1),
+        format!("{rendered}\n"),
+    )
+    .unwrap();
+    let shown = show(&store, "alpha", 1).unwrap();
+    assert_eq!(shown, build("wayside-checkpoint/1"));
+}
+
 /// A /2 store over a two member bundle, the starting point of
 /// the damage battery.
 fn damaged_v2_store(tag: &str) -> (PathBuf, PathBuf) {
