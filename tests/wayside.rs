@@ -2097,3 +2097,101 @@ fn cli_show_with_both_streams_unwritable_keeps_the_typed_exit() {
     let status = run_cli_both_full(&["--store", store.to_str().unwrap(), "show", "alpha", "1"]);
     assert_eq!(status, 1);
 }
+
+// WS-A33, the backslash name refusals at the state walk.
+
+/// WS-A33: a file name carrying a backslash is refused at
+/// the walk, because no recorded path may carry one and the
+/// walk's rendering would record the file under the nested
+/// path its name renders to. On the code this pin was
+/// written against, the checkpoint succeeded and recorded
+/// the file under that rendered path.
+#[cfg(unix)]
+#[test]
+fn checkpoint_refuses_a_file_name_carrying_a_backslash() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let base = temp_dir("backslash-file");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("plain.txt", b"plain")]);
+    std::fs::write(
+        state.join(std::ffi::OsStr::from_bytes(b"x\\y")),
+        b"backslash bytes",
+    )
+    .unwrap();
+    let error = expect_error(checkpoint(&store, "alpha", &state, None, b""));
+    assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert_eq!(error.exit_code(), 1);
+    assert!(
+        error.message().contains("carries a backslash at x/y"),
+        "{}",
+        error.message()
+    );
+    assert!(!checkpoint_dir(&store, "alpha", 1).exists());
+    let clean = make_state(&base.join("clean"), &[("a.txt", b"a")]);
+    let manifest = checkpoint(&store, "alpha", &clean, None, b"").unwrap();
+    assert_eq!(manifest.sequence, 1);
+}
+
+/// WS-A33: a directory name carrying a backslash is
+/// refused the same way, before the walk descends into
+/// it. On the code this pin was written against, the
+/// checkpoint succeeded and recorded the directory's
+/// contents under the rendered path.
+#[cfg(unix)]
+#[test]
+fn checkpoint_refuses_a_directory_name_carrying_a_backslash() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let base = temp_dir("backslash-dir");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("plain.txt", b"plain")]);
+    let dir = state.join(std::ffi::OsStr::from_bytes(b"x\\y"));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("inner.txt"), b"inner").unwrap();
+    let error = expect_error(checkpoint(&store, "alpha", &state, None, b""));
+    assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert_eq!(error.exit_code(), 1);
+    assert!(
+        error.message().contains("carries a backslash at x/y"),
+        "{}",
+        error.message()
+    );
+    assert!(!checkpoint_dir(&store, "alpha", 1).exists());
+    let clean = make_state(&base.join("clean"), &[("a.txt", b"a")]);
+    let manifest = checkpoint(&store, "alpha", &clean, None, b"").unwrap();
+    assert_eq!(manifest.sequence, 1);
+}
+
+/// WS-A33, the collision shape: a backslash name standing
+/// beside the nested path it renders to is refused. On
+/// the code this pin was written against, the checkpoint
+/// succeeded, both payloads were published to the one
+/// recorded path, and the manifest repeated the path, so
+/// every later read refused the checkpoint as corrupt.
+#[cfg(unix)]
+#[test]
+fn checkpoint_refuses_a_backslash_name_colliding_with_a_nested_path() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let base = temp_dir("backslash-collision");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("x/y", b"nested bytes")]);
+    std::fs::write(
+        state.join(std::ffi::OsStr::from_bytes(b"x\\y")),
+        b"backslash bytes",
+    )
+    .unwrap();
+    let error = expect_error(checkpoint(&store, "alpha", &state, None, b""));
+    assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert_eq!(error.exit_code(), 1);
+    assert!(
+        error.message().contains("carries a backslash at x/y"),
+        "{}",
+        error.message()
+    );
+    assert!(!checkpoint_dir(&store, "alpha", 1).exists());
+    let clean = make_state(&base.join("clean"), &[("a.txt", b"a")]);
+    let manifest = checkpoint(&store, "alpha", &clean, None, b"").unwrap();
+    assert_eq!(manifest.sequence, 1);
+}
