@@ -542,6 +542,28 @@ fn validate_recorded_path(rel: &StrictValue, path: &Path) -> Result<String> {
     Ok(text)
 }
 
+/// Whether a recorded path list stands in path order with no
+/// path repeated (WS-A18): the order and uniqueness judgement
+/// the manifest validators share.
+fn paths_in_order_without_repeats(paths: &[String]) -> bool {
+    let mut sorted = paths.to_vec();
+    sorted.sort();
+    if paths != sorted.as_slice() {
+        return false;
+    }
+    sorted.dedup();
+    sorted.len() == paths.len()
+}
+
+/// Whether a recorded path list repeats no path, in any order
+/// (WS-A18).
+fn paths_without_repeats(paths: &[String]) -> bool {
+    let mut sorted = paths.to_vec();
+    sorted.sort();
+    sorted.dedup();
+    sorted.len() == paths.len()
+}
+
 fn validate_hash(value: &StrictValue, path: &Path, what: &str) -> Result<String> {
     match value {
         StrictValue::Str(text)
@@ -740,21 +762,13 @@ fn validate_databases(
             members,
         });
     }
-    let mut sorted = database_paths.clone();
-    sorted.sort();
-    let mut deduped = database_paths.clone();
-    deduped.sort();
-    deduped.dedup();
-    if database_paths != sorted || deduped.len() != database_paths.len() {
+    if !paths_in_order_without_repeats(&database_paths) {
         return Err(corrupt(
             path,
             "the database entries are not in path order or repeat a path",
         ));
     }
-    let mut recorded_sorted = recorded_paths.clone();
-    recorded_sorted.sort();
-    recorded_sorted.dedup();
-    if recorded_sorted.len() != recorded_paths.len() {
+    if !paths_without_repeats(&recorded_paths) {
         return Err(corrupt(path, "the database entries repeat a path"));
     }
     let file_path_set: BTreeSet<&str> = file_paths.iter().map(String::as_str).collect();
@@ -800,12 +814,7 @@ fn validate_directories(
     for item in items {
         directories.push(validate_recorded_path(item, path)?);
     }
-    let mut sorted = directories.clone();
-    sorted.sort();
-    let mut deduped = directories.clone();
-    deduped.sort();
-    deduped.dedup();
-    if directories != sorted || deduped.len() != directories.len() {
+    if !paths_in_order_without_repeats(&directories) {
         return Err(corrupt(
             path,
             "the directory entries are not in path order or repeat a path",
@@ -993,12 +1002,7 @@ fn validate_manifest(
             size,
         });
     }
-    let mut sorted = seen.clone();
-    sorted.sort();
-    let mut deduped = seen.clone();
-    deduped.sort();
-    deduped.dedup();
-    if seen != sorted || deduped.len() != seen.len() {
+    if !paths_in_order_without_repeats(&seen) {
         return Err(corrupt(
             path,
             "the file entries are not in path order or repeat a path",
