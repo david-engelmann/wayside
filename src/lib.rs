@@ -2728,19 +2728,14 @@ pub fn fork(
         ))
     })?;
     let forked = Manifest {
-        format: manifest.format.clone(),
         session: new_session.to_string(),
         sequence: 1,
         created_at: now_isoformat(),
-        env: manifest.env.clone(),
-        memory: manifest.memory.clone(),
-        files: manifest.files.clone(),
-        databases: manifest.databases.clone(),
-        directories: manifest.directories.clone(),
         forked_from: Some(ForkRef {
             session: source_session.to_string(),
             sequence: sequence as i128,
         }),
+        ..manifest
     };
     publish(store, new_session, 1, &forked, &entries, &memory)?;
     Ok(forked)
