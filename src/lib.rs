@@ -24,6 +24,7 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use fs2::FileExt;
 use serde::Deserialize;
@@ -121,9 +122,15 @@ type Lister = dyn Fn(&Path) -> io::Result<Vec<PathBuf>> + Send + Sync;
 /// sorted order.
 type WalkedTree = (Vec<(String, Vec<u8>)>, Vec<String>);
 
+/// The lowercase hex rendering of a byte string (WS-A20):
+/// the one statement of the idiom the digests and the
+/// temporary names share.
+fn hex_lowercase(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 fn sha256_hex(data: &[u8]) -> String {
-    let digest = Sha256::digest(data);
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    hex_lowercase(&Sha256::digest(data))
 }
 
 /// Render a string the way Python's repr renders it, for the
@@ -2122,11 +2129,19 @@ fn temporary_hex() -> String {
             for (index, byte) in bytes.iter_mut().enumerate() {
                 *byte = (nanos >> ((index % 8) * 8)) as u8 ^ (index as u8).wrapping_mul(37);
             }
+            // The fallback name also carries the process id and
+            // a counter that never repeats inside the process,
+            // so two names derived in the same process differ
+            // even at a frozen clock (WS-A7).
+            bytes[8..12].copy_from_slice(&std::process::id().to_le_bytes());
+            static FALLBACK_COUNTER: AtomicU64 = AtomicU64::new(0);
+            let count = FALLBACK_COUNTER.fetch_add(1, Ordering::SeqCst);
+            bytes[12..16].copy_from_slice(&(count as u32).to_le_bytes());
         }
     }
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    hex_lowercase(&bytes)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2533,11 +2548,7 @@ fn checkpoint_inner(
             }
             DatabaseEntry {
                 path: rel.clone(),
-                bundle_sha256: hasher
-                    .finalize()
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect(),
+                bundle_sha256: hex_lowercase(&hasher.finalize()),
                 members: members
                     .iter()
                     .zip(hashes.iter())
