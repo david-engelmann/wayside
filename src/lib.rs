@@ -107,8 +107,10 @@ type VerifiedPayloads = (Vec<(String, Vec<u8>)>, Vec<u8>);
 
 /// One captured database bundle: the declared path together
 /// with its member readings as relative path and bytes pairs
-/// in bundle order.
-type CapturedBundle = (String, Vec<(String, Vec<u8>)>);
+/// in bundle order, and the first reading's member hashes,
+/// computed once in the agreement proof and shared with the
+/// manifest construction.
+type CapturedBundle = (String, Vec<(String, Vec<u8>)>, Vec<String>);
 
 /// The directory listing the state tree walk reads through.
 type Lister = dyn Fn(&Path) -> io::Result<Vec<PathBuf>> + Send + Sync;
@@ -2313,14 +2315,22 @@ fn read_bundle_pass(
 
 /// Whether two readings of one bundle agree: the same members
 /// in the same order, each with the same size and the same
-/// hash (WS-13).
-fn readings_agree(first: &[(String, Vec<u8>)], second: &[(String, Vec<u8>)]) -> bool {
+/// hash (WS-13). The first reading's hashes are the caller's,
+/// computed once and shared with the manifest construction,
+/// so no member of the first reading is hashed twice for the
+/// two judgements (WS-A4).
+fn readings_agree(
+    first: &[(String, Vec<u8>)],
+    first_hashes: &[String],
+    second: &[(String, Vec<u8>)],
+) -> bool {
     first.len() == second.len()
         && first
             .iter()
             .zip(second.iter())
-            .all(|((rel_a, a), (rel_b, b))| {
-                rel_a == rel_b && a.len() == b.len() && sha256_hex(a) == sha256_hex(b)
+            .zip(first_hashes.iter())
+            .all(|(((rel_a, a), (rel_b, b)), hash_a)| {
+                rel_a == rel_b && a.len() == b.len() && hash_a == &sha256_hex(b)
             })
 }
 
@@ -2458,13 +2468,14 @@ fn checkpoint_inner(
     for rel in &declared {
         let first = read_bundle_pass(state_dir, rel, reader)?;
         let second = read_bundle_pass(state_dir, rel, reader)?;
-        if !readings_agree(&first, &second) {
+        let first_hashes: Vec<String> = first.iter().map(|(_, data)| sha256_hex(data)).collect();
+        if !readings_agree(&first, &first_hashes, &second) {
             return Err(Error::wayside(format!(
                 "the database at {rel} changed during capture, so the \
                  checkpoint is refused"
             )));
         }
-        bundles.push((rel.clone(), first));
+        bundles.push((rel.clone(), first, first_hashes));
     }
     // Recording is single: bundle member paths leave the file
     // list and the member bytes ride in the payload set once,
@@ -2513,19 +2524,29 @@ fn checkpoint_inner(
     };
     let databases: Vec<DatabaseEntry> = bundles
         .iter()
-        .map(|(rel, members)| {
-            let mut joined: Vec<u8> = Vec::new();
+        .map(|(rel, members, hashes)| {
+            // The bundle digest is the hash of the member
+            // bytes in bundle order, fed to one hasher member
+            // by member: the joined copy this replaces was a
+            // further copy of the bundle's bytes held only to
+            // be hashed once (WS-A4).
+            let mut hasher = Sha256::new();
             for (_, data) in members {
-                joined.extend_from_slice(data);
+                hasher.update(data);
             }
             DatabaseEntry {
                 path: rel.clone(),
-                bundle_sha256: sha256_hex(&joined),
+                bundle_sha256: hasher
+                    .finalize()
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect(),
                 members: members
                     .iter()
-                    .map(|(member_rel, data)| DatabaseMember {
+                    .zip(hashes.iter())
+                    .map(|((member_rel, data), hash)| DatabaseMember {
                         path: member_rel.clone(),
-                        sha256: sha256_hex(data),
+                        sha256: hash.clone(),
                         size: data.len() as i128,
                     })
                     .collect(),
@@ -2542,9 +2563,9 @@ fn checkpoint_inner(
         memory,
         None,
     );
-    for (_, members) in &bundles {
+    for (_, members, _) in bundles {
         for (member_rel, data) in members {
-            payloads.push((member_rel.clone(), data.clone()));
+            payloads.push((member_rel, data));
         }
     }
     payloads.sort_by(|a, b| a.0.cmp(&b.0));
