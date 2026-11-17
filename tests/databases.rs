@@ -1566,6 +1566,40 @@ fn compare_answers_from_the_record_with_damaged_payloads() {
 }
 
 #[test]
+fn an_edited_bundle_digest_verifies_clean_and_compares_different() {
+    // The bound WS-23 states, pinned: verify never recomputes
+    // the recorded bundle digest, so an edited bundle_sha256
+    // is taken as the record, while compare answers from the
+    // recorded digests alone (WS-A29).
+    let base = temp_dir("compare-edited-digest");
+    let store = base.join("store");
+    let state = make_state(
+        &base.join("state"),
+        &[("app.db", b"bundle main"), ("app.db-wal", b"bundle wal")],
+    );
+    db_checkpoint(&store, "alpha", &state, &["app.db"]).unwrap();
+    db_checkpoint(&store, "alpha", &state, &["app.db"]).unwrap();
+    let edited = sha256_hex(b"a bundle that stands nowhere on disk");
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["databases"][0]["bundle_sha256"] = serde_json::json!(edited.clone());
+    });
+    // The edited record reads back as the record, and verify
+    // returns it clean, its payload untouched and its digest
+    // taken as recorded.
+    let shown = show(&store, "alpha", 1).unwrap();
+    assert_eq!(shown.databases[0].bundle_sha256, edited);
+    let verified = verify_checkpoint(&store, "alpha", 1).unwrap();
+    assert_eq!(verified.databases[0].bundle_sha256, edited);
+    // Compare judges the pair by the recorded digests, so the
+    // two records of one bundle stand Different.
+    let comparison = compare_checkpoints(&store, "alpha", 1, 2).unwrap();
+    assert_eq!(
+        comparison.databases[0].standing,
+        DatabaseStanding::Different
+    );
+}
+
+#[test]
 fn compare_reports_each_database_path_in_order() {
     let base = temp_dir("compare-paths");
     let store = base.join("store");
