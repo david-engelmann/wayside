@@ -677,6 +677,56 @@ fn manifest_with_a_wrong_format_is_refused() {
     assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
 }
 
+/// WS-A35: the files list order judgement refuses a manifest
+/// whose file entries stand out of path order. The pin guards
+/// the judgement the adjacent pair repair must not move: it
+/// passes on the clone and sort form the repair replaces and
+/// on the repaired form, and fails on a repair that weakens
+/// the judgement, a non strict comparison among them.
+#[test]
+fn manifest_with_file_entries_out_of_order_is_refused() {
+    let base = temp_dir("files-order");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a"), ("b.txt", b"b")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["files"].as_array_mut().unwrap().swap(0, 1);
+    });
+    let error = expect_error(show(&store, "alpha", 1));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("the file entries are not in path order or repeat a path"),
+        "{}",
+        error.message()
+    );
+}
+
+/// WS-A35: the same judgement refuses a manifest whose files
+/// list repeats an entry, the uniqueness half of the one
+/// judgement, guarded the same way.
+#[test]
+fn manifest_with_a_repeated_file_entry_is_refused() {
+    let base = temp_dir("files-repeat");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        let entry = value["files"][0].clone();
+        value["files"].as_array_mut().unwrap().push(entry);
+    });
+    let error = expect_error(show(&store, "alpha", 1));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("the file entries are not in path order or repeat a path"),
+        "{}",
+        error.message()
+    );
+}
+
 #[test]
 fn manifest_with_a_missing_or_extra_field_is_refused() {
     let base = temp_dir("field-set");
