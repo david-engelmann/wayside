@@ -1280,13 +1280,17 @@ fn render_directories_array(directories: &[String], level: usize, out: &mut Stri
 /// and the reader refuses a /2 rendering whose conditional
 /// fields stand empty.
 pub fn render_manifest(manifest: &Manifest) -> String {
-    let effective_format = if manifest.format == FORMAT_V2
-        && manifest.databases.is_empty()
-        && manifest.directories.is_empty()
-    {
+    // The rendering is derived from the content throughout,
+    // as new_manifest derives the format (WS-A14): the format
+    // line names /2 exactly when a conditional field stands,
+    // and each conditional field below stands exactly when
+    // its list is non empty, so a hand built value renders
+    // the content it carries under the format that content
+    // names, and no field it carries is dropped.
+    let effective_format = if manifest.databases.is_empty() && manifest.directories.is_empty() {
         FORMAT_NAME
     } else {
-        manifest.format.as_str()
+        FORMAT_V2
     };
     let mut out = String::new();
     out.push_str("{\n");
@@ -1298,9 +1302,7 @@ pub fn render_manifest(manifest: &Manifest) -> String {
     escape_json_string(&manifest.created_at, &mut field);
     fields.push(field);
 
-    if effective_format == FORMAT_V2
-        && (!manifest.databases.is_empty() || manifest.directories.is_empty())
-    {
+    if !manifest.databases.is_empty() {
         let mut field = String::new();
         write_indent(&mut field, 1);
         escape_json_string("databases", &mut field);
@@ -1309,7 +1311,7 @@ pub fn render_manifest(manifest: &Manifest) -> String {
         fields.push(field);
     }
 
-    if effective_format == FORMAT_V2 && !manifest.directories.is_empty() {
+    if !manifest.directories.is_empty() {
         let mut field = String::new();
         write_indent(&mut field, 1);
         escape_json_string("directories", &mut field);

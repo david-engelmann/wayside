@@ -1049,6 +1049,132 @@ fn hand_built_both_empty_v2_manifest_renders_as_format_1() {
     assert_eq!(shown, build("wayside-checkpoint/1"));
 }
 
+#[test]
+fn hand_built_format_1_manifest_with_a_database_renders_the_field_at_format_2() {
+    // WS-A14: the rendering is derived from the content
+    // throughout, so a hand built /1 value carrying a database
+    // renders as the /2 rendering of the same value, the
+    // databases field standing, where the format gated
+    // rendering dropped the field the value carries and
+    // rendered the /1 format line over it.
+    let build = |format: &str| wayside::Manifest {
+        format: format.to_string(),
+        session: "alpha".to_string(),
+        sequence: 1,
+        created_at: "2026-11-02T10:00:00+00:00".to_string(),
+        env: BTreeMap::new(),
+        memory: wayside::MemoryEntry {
+            sha256: EMPTY_SHA256.to_string(),
+            size: 0,
+        },
+        files: Vec::new(),
+        databases: vec![wayside::DatabaseEntry {
+            path: "data/app.db".to_string(),
+            bundle_sha256: EMPTY_SHA256.to_string(),
+            members: vec![wayside::DatabaseMember {
+                path: "data/app.db".to_string(),
+                sha256: EMPTY_SHA256.to_string(),
+                size: 0,
+            }],
+        }],
+        directories: Vec::new(),
+        forked_from: None,
+    };
+    let rendered = wayside::render_manifest(&build("wayside-checkpoint/1"));
+    assert_eq!(
+        rendered,
+        wayside::render_manifest(&build("wayside-checkpoint/2"))
+    );
+    assert!(
+        rendered.contains("\"format\": \"wayside-checkpoint/2\""),
+        "{rendered}"
+    );
+    assert!(rendered.contains("\"databases\""), "{rendered}");
+    // And the rendered bytes are ones the reader accepts, as
+    // the same value at /2: staged as the manifest of a real
+    // checkpoint directory, they read back through show.
+    let base = temp_dir("render-f1-with-database");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("notes.txt", b"plain bytes")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    std::fs::write(manifest_path(&store, "alpha", 1), format!("{rendered}\n")).unwrap();
+    let shown = show(&store, "alpha", 1).unwrap();
+    assert_eq!(shown, build("wayside-checkpoint/2"));
+}
+
+#[test]
+fn hand_built_format_1_manifest_with_directories_renders_the_field_at_format_2() {
+    // WS-A14, the directories field: a hand built /1 value
+    // recording empty directories renders as the /2 rendering
+    // of the same value, the directories field standing and
+    // no databases field beside it.
+    let build = |format: &str| wayside::Manifest {
+        format: format.to_string(),
+        session: "alpha".to_string(),
+        sequence: 1,
+        created_at: "2026-11-02T10:00:00+00:00".to_string(),
+        env: BTreeMap::new(),
+        memory: wayside::MemoryEntry {
+            sha256: EMPTY_SHA256.to_string(),
+            size: 0,
+        },
+        files: Vec::new(),
+        databases: Vec::new(),
+        directories: vec!["spool".to_string()],
+        forked_from: None,
+    };
+    let rendered = wayside::render_manifest(&build("wayside-checkpoint/1"));
+    assert_eq!(
+        rendered,
+        wayside::render_manifest(&build("wayside-checkpoint/2"))
+    );
+    assert!(
+        rendered.contains("\"format\": \"wayside-checkpoint/2\""),
+        "{rendered}"
+    );
+    assert!(rendered.contains("\"directories\""), "{rendered}");
+    assert!(!rendered.contains("\"databases\""), "{rendered}");
+    let base = temp_dir("render-f1-with-directories");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("notes.txt", b"plain bytes")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    std::fs::write(manifest_path(&store, "alpha", 1), format!("{rendered}\n")).unwrap();
+    let shown = show(&store, "alpha", 1).unwrap();
+    assert_eq!(shown, build("wayside-checkpoint/2"));
+}
+
+#[test]
+fn hand_built_manifest_with_an_unknown_format_renders_by_its_content() {
+    // WS-A14: a format string no reader accepts renders by
+    // the value's content rather than verbatim, so the bytes
+    // rendered are bytes the reader accepts, stating the
+    // content the value carries.
+    let build = |format: &str| wayside::Manifest {
+        format: format.to_string(),
+        session: "alpha".to_string(),
+        sequence: 1,
+        created_at: "2026-11-02T10:00:00+00:00".to_string(),
+        env: BTreeMap::new(),
+        memory: wayside::MemoryEntry {
+            sha256: EMPTY_SHA256.to_string(),
+            size: 0,
+        },
+        files: Vec::new(),
+        databases: Vec::new(),
+        directories: vec!["spool".to_string()],
+        forked_from: None,
+    };
+    let rendered = wayside::render_manifest(&build("wayside-checkpoint/9"));
+    assert_eq!(
+        rendered,
+        wayside::render_manifest(&build("wayside-checkpoint/2"))
+    );
+    assert!(
+        rendered.contains("\"format\": \"wayside-checkpoint/2\""),
+        "{rendered}"
+    );
+}
+
 /// A /2 store over a two member bundle, the starting point of
 /// the damage battery.
 fn damaged_v2_store(tag: &str) -> (PathBuf, PathBuf) {
