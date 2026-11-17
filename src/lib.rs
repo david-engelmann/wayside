@@ -2426,7 +2426,7 @@ fn checkpoint_inner(
             state_dir.display()
         )));
     }
-    let (walked, walked_directories) = read_state_tree(state_dir, reader)?;
+    let (mut walked, walked_directories) = read_state_tree(state_dir, reader)?;
     // Standing and bound validation against the walked list:
     // each declared path must name a regular file the walk
     // read, and the standing members of each bundle must sum
@@ -2455,6 +2455,20 @@ fn checkpoint_inner(
             return Err(bound_error(rel));
         }
         shm_paths.insert(format!("{rel}-shm"));
+    }
+    // The walked copies of the bundle member bytes and of the
+    // -shm companions are never read again. The two pass proof
+    // below reads every member fresh from the state tree, and
+    // the payload set built after the proof drops both kinds
+    // from the walked list unexamined. The validation above
+    // has already taken every length it needs from them, so
+    // their buffers are released here, before the lock, and a
+    // capture's peak no longer holds the walked copy of a
+    // bundle beside the two readings of its proof (WS-A4).
+    for (rel, data) in &mut walked {
+        if member_paths.contains(rel) || shm_paths.contains(rel) {
+            *data = Vec::new();
+        }
     }
     let _lock = locked(store)?;
     check_session_links(store, session)?;
