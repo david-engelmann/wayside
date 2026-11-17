@@ -1849,18 +1849,10 @@ fn cli_reports_unrecognized_arguments_at_the_top_level() {
     let result = run_cli(&store, &["list", "alpha", "--bogus"]);
     assert_eq!(result.status, 2);
     assert!(result.stderr.starts_with("usage: wayside"), "{}", result.stderr);
-    assert!(
-        result.stderr.contains("unrecognized arguments: --bogus"),
-        "{}",
-        result.stderr
-    );
+    assert!(result.stderr.contains("unrecognized arguments: --bogus"), "{}", result.stderr);
     let result = run_cli(&store, &["list", "alpha", "extra"]);
     assert_eq!(result.status, 2);
-    assert!(
-        result.stderr.contains("unrecognized arguments: extra"),
-        "{}",
-        result.stderr
-    );
+    assert!(result.stderr.contains("unrecognized arguments: extra"), "{}", result.stderr);
 }
 
 // WS-A45: an unknown command word is refused by the top level
@@ -1879,10 +1871,7 @@ fn cli_refuses_an_unknown_command_as_an_invalid_choice() {
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     assert_eq!(output.status.code().unwrap_or(-1), 2, "{stderr}");
     assert!(stderr.starts_with("usage: wayside"), "{stderr}");
-    assert!(
-        stderr.contains("argument command: invalid choice: 'bogus'"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("argument command: invalid choice: 'bogus'"), "{stderr}");
     assert!(!store.exists());
 }
 
@@ -1897,24 +1886,16 @@ fn cli_reports_the_arguments_a_command_requires() {
     let store = base.join("store");
     let result = run_cli(&store, &["checkpoint", "alpha"]);
     assert_eq!(result.status, 2);
+    assert!(result.stderr.contains("usage: wayside checkpoint"), "{}", result.stderr);
     assert!(
-        result.stderr.contains("usage: wayside checkpoint"),
-        "{}",
-        result.stderr
-    );
-    assert!(
-        result
-            .stderr
-            .contains("the following arguments are required: --state"),
+        result.stderr.contains("the following arguments are required: --state"),
         "{}",
         result.stderr
     );
     let result = run_cli(&store, &["restore", "alpha"]);
     assert_eq!(result.status, 2);
     assert!(
-        result
-            .stderr
-            .contains("the following arguments are required: sequence, --target"),
+        result.stderr.contains("the following arguments are required: sequence, --target"),
         "{}",
         result.stderr
     );
@@ -1924,10 +1905,7 @@ fn cli_reports_the_arguments_a_command_requires() {
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     assert_eq!(output.status.code().unwrap_or(-1), 2, "{stderr}");
-    assert!(
-        stderr.contains("the following arguments are required: --store"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("the following arguments are required: --store"), "{stderr}");
 }
 
 // WS-A45: an option left without a value is refused where it
@@ -1941,18 +1919,14 @@ fn cli_refuses_an_option_left_without_a_value() {
     let result = run_cli(&store, &["checkpoint", "alpha", "--state"]);
     assert_eq!(result.status, 2);
     assert!(
-        result
-            .stderr
-            .contains("argument --state: expected one argument"),
+        result.stderr.contains("argument --state: expected one argument"),
         "{}",
         result.stderr
     );
     let result = run_cli(&store, &["checkpoint", "alpha", "--state", "--memory"]);
     assert_eq!(result.status, 2);
     assert!(
-        result
-            .stderr
-            .contains("argument --state: expected one argument"),
+        result.stderr.contains("argument --state: expected one argument"),
         "{}",
         result.stderr
     );
@@ -1978,9 +1952,7 @@ fn cli_help_prints_the_usage_and_exits_zero() {
     let result = run_cli(&store, &["checkpoint", "--help"]);
     assert_eq!(result.status, 0, "{}", result.stderr);
     assert!(
-        result
-            .stdout
-            .contains("usage: wayside checkpoint [-h] --state STATE"),
+        result.stdout.contains("usage: wayside checkpoint [-h] --state STATE"),
         "{}",
         result.stdout
     );
@@ -2001,16 +1973,8 @@ fn cli_double_dash_ends_option_parsing() {
     let result = run_cli(&store, &["list", "--", "-weird"]);
     assert_eq!(result.status, 2);
     assert!(result.stderr.starts_with("error:"), "{}", result.stderr);
-    assert!(
-        result.stderr.contains("invalid session id '-weird'"),
-        "{}",
-        result.stderr
-    );
-    assert!(
-        !result.stderr.contains("unrecognized arguments"),
-        "{}",
-        result.stderr
-    );
+    assert!(result.stderr.contains("invalid session id '-weird'"), "{}", result.stderr);
+    assert!(!result.stderr.contains("unrecognized arguments"), "{}", result.stderr);
 }
 
 // WS-A45 with WS-A26: the help texts print through the same
@@ -2020,19 +1984,21 @@ fn cli_double_dash_ends_option_parsing() {
 #[cfg(unix)]
 #[test]
 fn cli_help_fails_when_its_output_cannot_be_written() {
-    let output = run_cli_stdout_full(&["--help"]);
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    assert_eq!(output.status.code().unwrap_or(-1), 1, "{stderr}");
+    let base = temp_dir("cli-help-full");
+    let store = base.join("store");
+    let result = run_cli_stdout_full(&store, &["--help"]);
+    assert_eq!(result.status, 1, "{}", result.stderr);
     assert!(
-        stderr.contains("error: the command output cannot be written"),
-        "{stderr}"
+        result.stderr.contains("error: the command output cannot be written"),
+        "{}",
+        result.stderr
     );
-    let output = run_cli_stdout_full(&["checkpoint", "--help"]);
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    assert_eq!(output.status.code().unwrap_or(-1), 1, "{stderr}");
+    let result = run_cli_stdout_full(&store, &["checkpoint", "--help"]);
+    assert_eq!(result.status, 1, "{}", result.stderr);
     assert!(
-        stderr.contains("error: the command output cannot be written"),
-        "{stderr}"
+        result.stderr.contains("error: the command output cannot be written"),
+        "{}",
+        result.stderr
     );
 }
 
