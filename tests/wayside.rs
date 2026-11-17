@@ -491,7 +491,10 @@ fn restore_refuses_a_populated_target_it_cannot_list() {
             let path = entry.path();
             if path.is_dir() {
                 stack.push(path);
-            } else if path.file_name().to_string_lossy() == "wayside.lock" {
+            } else if path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy() == "wayside.lock")
+            {
                 std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
             } else {
                 std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
