@@ -500,6 +500,21 @@ fn value_repr(value: &StrictValue) -> String {
     }
 }
 
+/// Whether a relative path is unsafe inside the state
+/// directory (WS-5): empty, absolute, carrying a backslash or
+/// a NUL, or carrying an empty, dot, or dot dot component.
+/// The one statement of the predicate the recorded path check
+/// and the declared path check share (WS-A19).
+fn path_is_unsafe(rel: &str) -> bool {
+    rel.is_empty()
+        || rel.starts_with('/')
+        || rel.contains('\\')
+        || rel.contains('\0')
+        || rel
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+}
+
 fn validate_recorded_path(rel: &StrictValue, path: &Path) -> Result<String> {
     let text = match rel {
         StrictValue::Str(text) => text.clone(),
@@ -513,14 +528,7 @@ fn validate_recorded_path(rel: &StrictValue, path: &Path) -> Result<String> {
             ))
         }
     };
-    let unsafe_path = text.is_empty()
-        || text.starts_with('/')
-        || text.contains('\\')
-        || text.contains('\0')
-        || text
-            .split('/')
-            .any(|part| part.is_empty() || part == "." || part == "..");
-    if unsafe_path {
+    if path_is_unsafe(&text) {
         return Err(corrupt(
             path,
             &format!(
@@ -2172,14 +2180,7 @@ fn new_manifest(
 /// path rules of WS-5 and the reservation of WS-1, as a caller
 /// error naming the path and the reason (WS-11).
 fn validate_declared_path(rel: &str) -> Result<()> {
-    let unsafe_path = rel.is_empty()
-        || rel.starts_with('/')
-        || rel.contains('\\')
-        || rel.contains('\0')
-        || rel
-            .split('/')
-            .any(|part| part.is_empty() || part == "." || part == "..");
-    if unsafe_path {
+    if path_is_unsafe(rel) {
         return Err(Error::wayside(format!(
             "the declared database path {} is not a safe relative path \
              inside the state directory",
