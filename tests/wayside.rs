@@ -640,6 +640,31 @@ fn manifest_with_a_duplicate_nested_key_is_refused() {
 }
 
 #[test]
+fn manifest_with_a_duplicate_key_carrying_the_separator_is_refused() {
+    let base = temp_dir("dup-separator");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    let env = env_of(&[("MODE", "first")]);
+    checkpoint(&store, "alpha", &state, Some(&env), b"").unwrap();
+    damage_manifest_text(&store, "alpha", 1, &|text| {
+        text.replacen(
+            "\"MODE\": \"first\"",
+            "\"note at line 5\": \"first\",\n    \"note at line 5\": \"second\"",
+            1,
+        )
+    });
+    let error = expect_error(show(&store, "alpha", 1));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("it repeats the key note at line 5"),
+        "{}",
+        error.message()
+    );
+}
+
+#[test]
 fn manifest_with_a_wrong_format_is_refused() {
     let base = temp_dir("wrong-format");
     let store = base.join("store");
