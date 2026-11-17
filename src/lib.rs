@@ -1274,8 +1274,20 @@ fn render_directories_array(directories: &[String], level: usize, out: &mut Stri
 /// wayside-checkpoint/2 manifest renders by its own format
 /// value, with the databases field standing in the sorted key
 /// order the rendering keeps, after created_at, and the
-/// directories field after it when a directory is recorded.
+/// directories field after it when a directory is recorded. A
+/// /2 value with both lists empty renders as the /1 rendering
+/// of the same value, because WS-21 writes that content as /1
+/// and the reader refuses a /2 rendering whose conditional
+/// fields stand empty.
 pub fn render_manifest(manifest: &Manifest) -> String {
+    let effective_format = if manifest.format == FORMAT_V2
+        && manifest.databases.is_empty()
+        && manifest.directories.is_empty()
+    {
+        FORMAT_NAME
+    } else {
+        manifest.format.as_str()
+    };
     let mut out = String::new();
     out.push_str("{\n");
     let mut fields: Vec<String> = Vec::new();
@@ -1286,7 +1298,7 @@ pub fn render_manifest(manifest: &Manifest) -> String {
     escape_json_string(&manifest.created_at, &mut field);
     fields.push(field);
 
-    if manifest.format == FORMAT_V2
+    if effective_format == FORMAT_V2
         && (!manifest.databases.is_empty() || manifest.directories.is_empty())
     {
         let mut field = String::new();
@@ -1297,7 +1309,7 @@ pub fn render_manifest(manifest: &Manifest) -> String {
         fields.push(field);
     }
 
-    if manifest.format == FORMAT_V2 && !manifest.directories.is_empty() {
+    if effective_format == FORMAT_V2 && !manifest.directories.is_empty() {
         let mut field = String::new();
         write_indent(&mut field, 1);
         escape_json_string("directories", &mut field);
@@ -1344,7 +1356,7 @@ pub fn render_manifest(manifest: &Manifest) -> String {
     write_indent(&mut field, 1);
     escape_json_string("format", &mut field);
     field.push_str(": ");
-    escape_json_string(&manifest.format, &mut field);
+    escape_json_string(effective_format, &mut field);
     fields.push(field);
 
     let mut field = String::new();
