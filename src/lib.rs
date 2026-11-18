@@ -1590,6 +1590,17 @@ fn require_session(root: &Path, session: &str) -> Result<()> {
     }
 }
 
+/// The corrupt checkpoint refusal (WS-A52): the one statement
+/// of the prefix every refusal that names a checkpoint corrupt
+/// from the payload reading family opens with, the sequence
+/// and the session named, with the caller's tail stating what
+/// stands corrupt about it.
+fn corrupt_checkpoint(session: &str, sequence: i64, tail: &str) -> Error {
+    Error::Corrupt(format!(
+        "checkpoint {sequence} of session {session} is corrupt, {tail}"
+    ))
+}
+
 /// Read and strictly validate one manifest, changing nothing
 /// on disk.
 fn load_manifest(root: &Path, session: &str, sequence: i64) -> Result<Manifest> {
@@ -1598,11 +1609,12 @@ fn load_manifest(root: &Path, session: &str, sequence: i64) -> Result<Manifest> 
     let path = ck.join(MANIFEST_NAME);
     if !path.is_file() {
         if ck.is_dir() {
-            return Err(Error::Corrupt(format!(
-                "checkpoint {sequence} of session {session} is corrupt, \
-                 its manifest is missing or is not a regular file, \
-                 so the checkpoint cannot be read"
-            )));
+            return Err(corrupt_checkpoint(
+                session,
+                sequence,
+                "its manifest is missing or is not a regular file, \
+                 so the checkpoint cannot be read",
+            ));
         }
         return Err(Error::NotFound(format!(
             "session {session} holds no checkpoint {sequence} in the store at {}",
@@ -1642,22 +1654,25 @@ fn read_payload(
 ) -> Result<Vec<u8>> {
     let payload = join_rel(&ck.join(FILES_NAME), rel);
     if !payload.is_file() {
-        return Err(Error::Corrupt(format!(
-            "checkpoint {sequence} of session {session} is corrupt, \
-             the payload for {rel} is missing"
-        )));
+        return Err(corrupt_checkpoint(
+            session,
+            sequence,
+            &format!("the payload for {rel} is missing"),
+        ));
     }
     let data = fs::read(&payload).map_err(|exc| {
-        Error::Corrupt(format!(
-            "checkpoint {sequence} of session {session} is corrupt, \
-             the payload for {rel} cannot be read, {exc}"
-        ))
+        corrupt_checkpoint(
+            session,
+            sequence,
+            &format!("the payload for {rel} cannot be read, {exc}"),
+        )
     })?;
     if data.len() as i128 != size || sha256_hex(&data) != sha256 {
-        return Err(Error::Corrupt(format!(
-            "checkpoint {sequence} of session {session} is corrupt, \
-             the payload for {rel} does not match its recorded hash and size"
-        )));
+        return Err(corrupt_checkpoint(
+            session,
+            sequence,
+            &format!("the payload for {rel} does not match its recorded hash and size"),
+        ));
     }
     Ok(data)
 }
@@ -1703,23 +1718,26 @@ fn read_verified(
     }
     let memory_path = ck.join(MEMORY_NAME);
     if !memory_path.is_file() {
-        return Err(Error::Corrupt(format!(
-            "checkpoint {sequence} of session {session} is corrupt, \
-             the memory document is missing"
-        )));
+        return Err(corrupt_checkpoint(
+            session,
+            sequence,
+            "the memory document is missing",
+        ));
     }
     let memory = fs::read(&memory_path).map_err(|exc| {
-        Error::Corrupt(format!(
-            "checkpoint {sequence} of session {session} is corrupt, \
-             the memory document cannot be read, {exc}"
-        ))
+        corrupt_checkpoint(
+            session,
+            sequence,
+            &format!("the memory document cannot be read, {exc}"),
+        )
     })?;
     if memory.len() as i128 != manifest.memory.size || sha256_hex(&memory) != manifest.memory.sha256
     {
-        return Err(Error::Corrupt(format!(
-            "checkpoint {sequence} of session {session} is corrupt, \
-             the memory document does not match its recorded hash and size"
-        )));
+        return Err(corrupt_checkpoint(
+            session,
+            sequence,
+            "the memory document does not match its recorded hash and size",
+        ));
     }
     Ok((entries, memory))
 }
