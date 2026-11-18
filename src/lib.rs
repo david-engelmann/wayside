@@ -554,6 +554,18 @@ fn validate_recorded_path(rel: &StrictValue, path: &Path) -> Result<String> {
             ),
         ));
     }
+    if let Some((first, _)) = text.split_once('/') {
+        if RESERVED_TOP_LEVEL.contains(&first) {
+            return Err(corrupt(
+                path,
+                &format!(
+                    "the recorded path {} stands below the name of a file \
+                     restore writes, so it is not a path a checkpoint may record",
+                    py_repr(&text)
+                ),
+            ));
+        }
+    }
     Ok(text)
 }
 
@@ -867,6 +879,24 @@ fn validate_directories(
             return Err(corrupt(
                 path,
                 &format!("the directory {directory} stands above a database member"),
+            ));
+        }
+        if file_paths
+            .iter()
+            .any(|file| directory.starts_with(&format!("{file}/")))
+        {
+            return Err(corrupt(
+                path,
+                &format!("the directory {directory} stands below a recorded file"),
+            ));
+        }
+        if member_paths
+            .iter()
+            .any(|member| directory.starts_with(&format!("{member}/")))
+        {
+            return Err(corrupt(
+                path,
+                &format!("the directory {directory} stands below a database member"),
             ));
         }
     }

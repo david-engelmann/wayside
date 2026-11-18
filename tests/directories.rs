@@ -624,6 +624,52 @@ fn reserved_top_level_directory_path_is_refused() {
 }
 
 #[test]
+fn directory_below_a_recorded_file_is_refused() {
+    let (_base, store) = directories_store("damage-below-file");
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["directories"] = serde_json::json!(["plan.txt/sub"]);
+    });
+    expect_corrupt(&store);
+}
+
+#[test]
+fn directory_below_a_database_member_is_refused() {
+    let base = temp_dir("damage-below-member");
+    let store = base.join("store");
+    let state = make_state(
+        &base.join("state"),
+        &[
+            ("plan.txt", b"first plan\n"),
+            ("data/app.db", b"synthetic database main bytes"),
+        ],
+    );
+    make_dirs(&state, &["spool"]);
+    db_checkpoint(&store, "alpha", &state, &["data/app.db"]).unwrap();
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["directories"] = serde_json::json!(["data/app.db/sub"]);
+    });
+    expect_corrupt(&store);
+}
+
+#[test]
+fn recorded_file_below_a_reserved_name_is_refused() {
+    let (_base, store) = directories_store("damage-file-below-reserved");
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["files"][0]["path"] = serde_json::json!("wayside.env/sub");
+    });
+    expect_corrupt(&store);
+}
+
+#[test]
+fn directory_below_a_reserved_name_is_refused() {
+    let (_base, store) = directories_store("damage-dir-below-reserved");
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["directories"] = serde_json::json!(["wayside.env/sub"]);
+    });
+    expect_corrupt(&store);
+}
+
+#[test]
 fn v1_manifest_carrying_directories_is_refused() {
     let base = temp_dir("damage-v1");
     let store = base.join("store");
