@@ -581,6 +581,60 @@ fn flipped_memory_byte_fails_restore_and_places_nothing() {
     assert!(!target.exists());
 }
 
+// WS-A55: the payload reading family's presence arms. A recorded
+// payload removed from a written checkpoint draws the missing
+// tail of the corrupt checkpoint refusal, through restore and
+// through verify alike, and nothing is placed. The family's
+// mismatch arms stand pinned by the flipped byte pins above.
+
+#[test]
+fn missing_payload_fails_restore_and_verify_and_places_nothing() {
+    let base = temp_dir("missing-payload");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"original bytes")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    std::fs::remove_file(
+        checkpoint_dir(&store, "alpha", 1)
+            .join("files")
+            .join("a.txt"),
+    )
+    .unwrap();
+    let target = base.join("target");
+    let error = expect_error(restore(&store, "alpha", 1, &target));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error.message().contains("the payload for a.txt is missing"),
+        "{}",
+        error.message()
+    );
+    assert!(!target.exists());
+    let error = expect_error(wayside::verify_checkpoint(&store, "alpha", 1));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error.message().contains("the payload for a.txt is missing"),
+        "{}",
+        error.message()
+    );
+}
+
+#[test]
+fn missing_memory_document_fails_restore_and_places_nothing() {
+    let base = temp_dir("missing-memory");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"memory bytes").unwrap();
+    std::fs::remove_file(checkpoint_dir(&store, "alpha", 1).join("memory.bin")).unwrap();
+    let target = base.join("target");
+    let error = expect_error(restore(&store, "alpha", 1, &target));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error.message().contains("the memory document is missing"),
+        "{}",
+        error.message()
+    );
+    assert!(!target.exists());
+}
+
 #[test]
 fn a_checkpoint_never_changes_once_written() {
     let base = temp_dir("immutable");
