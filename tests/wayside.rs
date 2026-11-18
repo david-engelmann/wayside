@@ -2063,6 +2063,116 @@ fn cli_help_fails_when_its_output_cannot_be_written() {
     );
 }
 
+// WS-A54: the fork and rewind arms of the command line, driven
+// end to end. The library's fork and rewind stand pinned at the
+// library surface; these pins hold the arms' own work, the
+// positionals in their slots, the sequence read from the second
+// of them, and the lines the arms print. The fork pin forks
+// checkpoint 2 of two and the rewind pin rewinds to checkpoint
+// 2 of three, so an arm that ignored the sequence slot and
+// always took checkpoint 1 fails both.
+
+#[test]
+fn cli_fork_copies_a_checkpoint_and_prints_its_line() {
+    let base = temp_dir("cli-fork");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"fork one")]);
+    let recorded = run_cli(
+        &store,
+        &["checkpoint", "alpha", "--state", state.to_str().unwrap()],
+    );
+    assert_eq!(recorded.status, 0, "{}", recorded.stderr);
+    std::fs::write(state.join("a.txt"), b"fork two").unwrap();
+    let recorded = run_cli(
+        &store,
+        &["checkpoint", "alpha", "--state", state.to_str().unwrap()],
+    );
+    assert_eq!(recorded.status, 0, "{}", recorded.stderr);
+    let forked = run_cli(&store, &["fork", "alpha", "2", "beta"]);
+    assert_eq!(forked.status, 0, "{}", forked.stderr);
+    assert_eq!(
+        forked.stdout,
+        "forked session alpha checkpoint 2 to session beta checkpoint 1\n"
+    );
+    let target = base.join("target");
+    let restored = run_cli(
+        &store,
+        &["restore", "beta", "1", "--target", target.to_str().unwrap()],
+    );
+    assert_eq!(restored.status, 0, "{}", restored.stderr);
+    assert_eq!(std::fs::read(target.join("a.txt")).unwrap(), b"fork two");
+}
+
+#[test]
+fn cli_rewind_restores_an_earlier_checkpoint_and_prints_its_line() {
+    let base = temp_dir("cli-rewind");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"version one")]);
+    let recorded = run_cli(
+        &store,
+        &["checkpoint", "alpha", "--state", state.to_str().unwrap()],
+    );
+    assert_eq!(recorded.status, 0, "{}", recorded.stderr);
+    std::fs::write(state.join("a.txt"), b"version two").unwrap();
+    let recorded = run_cli(
+        &store,
+        &["checkpoint", "alpha", "--state", state.to_str().unwrap()],
+    );
+    assert_eq!(recorded.status, 0, "{}", recorded.stderr);
+    std::fs::write(state.join("a.txt"), b"version three").unwrap();
+    let recorded = run_cli(
+        &store,
+        &["checkpoint", "alpha", "--state", state.to_str().unwrap()],
+    );
+    assert_eq!(recorded.status, 0, "{}", recorded.stderr);
+    let target = base.join("target");
+    let rewound = run_cli(
+        &store,
+        &["rewind", "alpha", "2", "--target", target.to_str().unwrap()],
+    );
+    assert_eq!(rewound.status, 0, "{}", rewound.stderr);
+    assert_eq!(
+        rewound.stdout,
+        format!(
+            "rewound session alpha to checkpoint 2 at {}\n",
+            target.display()
+        )
+    );
+    assert_eq!(std::fs::read(target.join("a.txt")).unwrap(), b"version two");
+}
+
+// WS-A54: an env pair carrying no equals sign is refused by the
+// command line's own pair reading, before the library is called
+// and before the store is created, at the plain refusal exit.
+
+#[test]
+fn cli_refuses_an_env_pair_without_an_equals_sign() {
+    let base = temp_dir("cli-env-pair");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    let result = run_cli(
+        &store,
+        &[
+            "checkpoint",
+            "alpha",
+            "--state",
+            state.to_str().unwrap(),
+            "--env",
+            "NOEQUALS",
+        ],
+    );
+    assert_eq!(result.status, 1);
+    assert!(result.stderr.starts_with("error:"), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("invalid env pair 'NOEQUALS', use KEY=VALUE"),
+        "{}",
+        result.stderr
+    );
+    assert!(!store.exists());
+}
+
 #[test]
 fn checkpoint_fails_when_a_state_subdirectory_cannot_be_listed() {
     let base = temp_dir("walk-sub-blocked");
