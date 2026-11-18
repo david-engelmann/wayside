@@ -957,6 +957,73 @@ fn planted_non_canonical_sequence_directory_is_ignored() {
     assert_eq!(manifest.sequence, 2);
 }
 
+/// WS-A56: a planted sequence directory naming zero counts
+/// nowhere. Sequence numbers start at 1, so the canonical
+/// spelling of zero, 000000, names no published checkpoint,
+/// exactly as an alias spelling names none: the listing
+/// passes it over, sequence assignment is unaffected by it,
+/// and a session holding only an empty zero directory holds
+/// no checkpoint for fork's refusal. On the code this pin
+/// was written against, the planted zero stood first in the
+/// listing and the fork into the zero only session was
+/// refused as already holding a checkpoint.
+#[test]
+fn planted_zero_sequence_directory_is_ignored() {
+    let base = temp_dir("zero-sequence");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    // A complete planted checkpoint at sequence 0: a full
+    // copy of the real checkpoint under the canonical name
+    // of zero, its manifest naming sequence 0.
+    copy_tree(
+        &checkpoint_dir(&store, "alpha", 1),
+        &store
+            .join("sessions")
+            .join("alpha")
+            .join("checkpoints")
+            .join("000000"),
+    );
+    damage_manifest_json(&store, "alpha", 0, &|value| {
+        value["sequence"] = serde_json::json!(0);
+    });
+    let listed: Vec<i64> = list_checkpoints(&store, "alpha")
+        .unwrap()
+        .iter()
+        .map(|entry| entry.sequence)
+        .collect();
+    assert_eq!(listed, [1]);
+    let manifest = checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    assert_eq!(manifest.sequence, 2);
+    // A session holding only a complete zero checkpoint
+    // lists nothing: the enumeration the listing and the
+    // allocator share excludes zero outright, not merely
+    // beside a real checkpoint.
+    copy_tree(
+        &checkpoint_dir(&store, "alpha", 1),
+        &store
+            .join("sessions")
+            .join("zeroonly")
+            .join("checkpoints")
+            .join("000000"),
+    );
+    damage_manifest_json(&store, "zeroonly", 0, &|value| {
+        value["sequence"] = serde_json::json!(0);
+    });
+    assert!(list_checkpoints(&store, "zeroonly").unwrap().is_empty());
+    // A session holding only an empty zero directory holds
+    // no checkpoint, so fork into it proceeds.
+    let ghost = store
+        .join("sessions")
+        .join("ghost")
+        .join("checkpoints")
+        .join("000000");
+    std::fs::create_dir_all(&ghost).unwrap();
+    let forked = fork(&store, "alpha", 1, "ghost").unwrap();
+    assert_eq!(forked.session, "ghost");
+    assert_eq!(forked.sequence, 1);
+}
+
 /// The worker mode of the parallel writers pin. Spawned by
 /// the pin below as a separate process with the
 /// WAYSIDE_WORKER_ variables set; run by the suite without
