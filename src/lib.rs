@@ -1640,10 +1640,7 @@ fn read_payload(
     sha256: &str,
     size: i128,
 ) -> Result<Vec<u8>> {
-    let mut payload = ck.join(FILES_NAME);
-    for part in rel.split('/') {
-        payload.push(part);
-    }
+    let payload = join_rel(&ck.join(FILES_NAME), rel);
     if !payload.is_file() {
         return Err(Error::Corrupt(format!(
             "checkpoint {sequence} of session {session} is corrupt, \
@@ -2097,10 +2094,7 @@ fn read_state_dir(
 /// separators and pushing the parts onto the root.
 fn write_entries(root: &Path, entries: &[(String, Vec<u8>)]) -> io::Result<()> {
     for (rel, data) in entries {
-        let mut dest = root.to_path_buf();
-        for part in rel.split('/') {
-            dest.push(part);
-        }
+        let dest = join_rel(root, rel);
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
         }
