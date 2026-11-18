@@ -1662,7 +1662,7 @@ fn read_recorded(
         return Err(corrupt_checkpoint(
             session,
             sequence,
-            &format!("{subject} is missing"),
+            &format!("{subject} is missing or is not a regular file"),
         ));
     }
     let data = fs::read(path).map_err(|exc| {

@@ -594,6 +594,67 @@ fn a_checkpoint_never_changes_once_written() {
     assert_eq!(hash_tree(&checkpoint_dir(&store, "alpha", 1)), before);
 }
 
+// WS-A60: the payload reading family's presence refusal. An entry
+// standing at a recorded payload's path that is not a regular file
+// draws the compound tail, missing or not a regular file, through
+// restore and through verify alike, and nothing is placed. The
+// removed case stands pinned by WS-A55's pins in their own seat.
+
+#[test]
+fn directory_at_payload_path_fails_restore_and_verify_and_places_nothing() {
+    let base = temp_dir("directory-payload");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"original bytes")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    let payload = checkpoint_dir(&store, "alpha", 1)
+        .join("files")
+        .join("a.txt");
+    std::fs::remove_file(&payload).unwrap();
+    std::fs::create_dir(&payload).unwrap();
+    let target = base.join("target");
+    let error = expect_error(restore(&store, "alpha", 1, &target));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("the payload for a.txt is missing or is not a regular file"),
+        "{}",
+        error.message()
+    );
+    assert!(!target.exists());
+    let error = expect_error(wayside::verify_checkpoint(&store, "alpha", 1));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("the payload for a.txt is missing or is not a regular file"),
+        "{}",
+        error.message()
+    );
+}
+
+#[test]
+fn directory_at_memory_path_fails_restore_and_places_nothing() {
+    let base = temp_dir("directory-memory");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"memory bytes").unwrap();
+    let memory = checkpoint_dir(&store, "alpha", 1).join("memory.bin");
+    std::fs::remove_file(&memory).unwrap();
+    std::fs::create_dir(&memory).unwrap();
+    let target = base.join("target");
+    let error = expect_error(restore(&store, "alpha", 1, &target));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("the memory document is missing or is not a regular file"),
+        "{}",
+        error.message()
+    );
+    assert!(!target.exists());
+}
+
 fn damage_manifest_text(
     store: &Path,
     session: &str,
