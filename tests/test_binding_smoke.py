@@ -285,8 +285,6 @@ def test_sequence_outside_the_i64_range_is_an_invalid_name(tmp_path):
 
 
 def test_manifest_dictionaries_stand_in_the_formats_field_order(tmp_path):
-    import json
-
     store = str(tmp_path / "store")
     state = tmp_path / "state"
     data = state / "data"
@@ -315,22 +313,17 @@ def test_manifest_dictionaries_stand_in_the_formats_field_order(tmp_path):
     (database,) = first["databases"]
     assert list(database.keys()) == ["bundle_sha256", "members", "path"]
 
-    stored = (
-        tmp_path
-        / "store"
-        / "sessions"
-        / "alpha"
-        / "checkpoints"
-        / "000001"
-        / "manifest.json"
-    ).read_text()
-    assert json.dumps(first, indent=2) + "\n" == stored
-
 
 def test_the_forked_manifest_dictionary_stands_in_the_formats_field_order(
     tmp_path,
 ):
     import json
+
+    # The byte identity below stands on the forked manifest because
+    # it carries every field the dictionary carries. An unforked
+    # manifest's dictionary carries forked_from as None where the
+    # stored rendering omits the field, so its serialization carries
+    # one line the stored text does not.
 
     store = str(tmp_path / "store")
     state = tmp_path / "state"
