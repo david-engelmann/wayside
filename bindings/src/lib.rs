@@ -85,7 +85,7 @@ fn sequence_argument(value: &Bound<'_, PyAny>, name: &str) -> PyResult<i64> {
 /// the wayside-checkpoint formats themselves. The dictionaries
 /// stand in the format's own sorted field order, so a caller
 /// who serializes a returned manifest with an order preserving
-/// writer reproduces the stored rendering. The databases
+/// writer meets every field in the stored order. The databases
 /// list stands empty for a wayside-checkpoint/1 manifest, and
 /// the directories list stands empty for a manifest that
 /// records no empty directory, as
