@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use pyo3::create_exception;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDict};
+use pyo3::types::{PyBool, PyDict, PyInt};
 
 use wayside_core::{CheckpointInfo, Comparison, DatabaseStanding, Error, Manifest};
 
@@ -51,14 +51,32 @@ fn to_py_error(error: Error) -> PyErr {
 /// 1 and 0 and a sequence is never meant as a truth value. Any
 /// other value converts the way Python converts an integer, and
 /// the library itself judges whether the number names a sequence
-/// it can use.
+/// it can use. An integer wider than the i64 range a sequence
+/// stands in is refused with the library's own invalid sequence
+/// refusal, the class the command line gives the same value,
+/// rather than the OverflowError its extraction raises (WS-A50).
 fn sequence_argument(value: &Bound<'_, PyAny>, name: &str) -> PyResult<i64> {
     if value.is_instance_of::<PyBool>() {
         Err(PyTypeError::new_err(format!(
             "{name} must be an integer, not a boolean"
         )))
     } else {
-        value.extract::<i64>()
+        value.extract::<i64>().map_err(|error| {
+            // An integer outside the i64 range fails extraction
+            // with an OverflowError, outside the exception ladder
+            // every refusal of this binding travels in. The value
+            // is an integer, only wider than a sequence can be,
+            // so it draws the invalid sequence refusal above
+            // (WS-A50). Any other type keeps the TypeError its
+            // extraction raised.
+            if value.is_instance_of::<PyInt>() {
+                InvalidNameError::new_err(format!(
+                    "invalid sequence {value}, use a positive integer"
+                ))
+            } else {
+                error
+            }
+        })
     }
 }
 
