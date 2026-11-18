@@ -1802,6 +1802,267 @@ fn cli_sequence_errors_share_the_invalid_name_exit_code() {
     assert!(!target.exists());
 }
 
+// WS-A45: the parser's equals form. An option's value may ride
+// on the option token itself, split at the first equals sign,
+// and --env keeps everything after its own first equals sign as
+// the pair. The store option takes the same form at the top
+// level.
+#[test]
+fn cli_accepts_options_in_the_equals_form() {
+    let base = temp_dir("cli-equals");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    let memory_file = base.join("memory.txt");
+    std::fs::write(&memory_file, b"cli memory").unwrap();
+    let state_arg = format!("--state={}", state.display());
+    let memory_arg = format!("--memory={}", memory_file.display());
+    let result = run_cli(
+        &store,
+        &[
+            "checkpoint",
+            "alpha",
+            &state_arg,
+            &memory_arg,
+            "--env=MODE=cli",
+        ],
+    );
+    assert_eq!(result.status, 0, "{}", result.stderr);
+    assert_eq!(result.stdout.trim(), "session alpha checkpoint 1");
+    let shown = run_cli(&store, &["show", "alpha", "1"]);
+    assert_eq!(shown.status, 0, "{}", shown.stderr);
+    let value: serde_json::Value = serde_json::from_str(&shown.stdout).unwrap();
+    assert_eq!(value["env"], serde_json::json!({"MODE": "cli"}));
+    assert_eq!(value["memory"]["size"].as_i64(), Some(10));
+    assert_eq!(
+        value["memory"]["sha256"].as_str(),
+        Some("db0e389c306df2e7e451ffc04c4c5d46e171afbb1b436d3611b141bc3ba319ae")
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
+        .arg(format!("--store={}", store.display()))
+        .args(["list", "alpha"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code().unwrap_or(-1), 0);
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(stdout.starts_with("1 "), "{stdout}");
+}
+
+// WS-A45: extras are the top level parser's report. An unknown
+// long option and a surplus positional both land in the extras,
+// and both are reported at exit 2 under the main usage, naming
+// the token as typed.
+#[test]
+fn cli_reports_unrecognized_arguments_at_the_top_level() {
+    let base = temp_dir("cli-extras");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    let result = run_cli(&store, &["list", "alpha", "--bogus"]);
+    assert_eq!(result.status, 2);
+    assert!(
+        result.stderr.starts_with("usage: wayside"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("unrecognized arguments: --bogus"),
+        "{}",
+        result.stderr
+    );
+    let result = run_cli(&store, &["list", "alpha", "extra"]);
+    assert_eq!(result.status, 2);
+    assert!(
+        result.stderr.contains("unrecognized arguments: extra"),
+        "{}",
+        result.stderr
+    );
+}
+
+// WS-A45: an unknown command word is refused by the top level
+// parser as an invalid choice, at exit 2 under the main usage,
+// before the store is ever opened.
+#[test]
+fn cli_refuses_an_unknown_command_as_an_invalid_choice() {
+    let base = temp_dir("cli-choice");
+    let store = base.join("store");
+    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
+        .arg("--store")
+        .arg(&store)
+        .arg("bogus")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(output.status.code().unwrap_or(-1), 2, "{stderr}");
+    assert!(stderr.starts_with("usage: wayside"), "{stderr}");
+    assert!(
+        stderr.contains("argument command: invalid choice: 'bogus'"),
+        "{stderr}"
+    );
+    assert!(!store.exists());
+}
+
+// WS-A45: the required arguments are reported as one list, in
+// grammar order, positionals and options together: a
+// subcommand missing its required option, a subcommand missing
+// a positional and an option, and the top level missing the
+// store option each draw their own list at exit 2.
+#[test]
+fn cli_reports_the_arguments_a_command_requires() {
+    let base = temp_dir("cli-required");
+    let store = base.join("store");
+    let result = run_cli(&store, &["checkpoint", "alpha"]);
+    assert_eq!(result.status, 2);
+    assert!(
+        result.stderr.contains("usage: wayside checkpoint"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result
+            .stderr
+            .contains("the following arguments are required: --state"),
+        "{}",
+        result.stderr
+    );
+    let result = run_cli(&store, &["restore", "alpha"]);
+    assert_eq!(result.status, 2);
+    assert!(
+        result
+            .stderr
+            .contains("the following arguments are required: sequence, --target"),
+        "{}",
+        result.stderr
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
+        .args(["list", "alpha"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(output.status.code().unwrap_or(-1), 2, "{stderr}");
+    assert!(
+        stderr.contains("the following arguments are required: --store"),
+        "{stderr}"
+    );
+}
+
+// WS-A45: an option left without a value is refused where it
+// stands. The end of the command line is one shape; an option
+// like token in the value's place is the same shape, because a
+// value that looks like an option is never taken as the value.
+#[test]
+fn cli_refuses_an_option_left_without_a_value() {
+    let base = temp_dir("cli-no-value");
+    let store = base.join("store");
+    let result = run_cli(&store, &["checkpoint", "alpha", "--state"]);
+    assert_eq!(result.status, 2);
+    assert!(
+        result
+            .stderr
+            .contains("argument --state: expected one argument"),
+        "{}",
+        result.stderr
+    );
+    let result = run_cli(&store, &["checkpoint", "alpha", "--state", "--memory"]);
+    assert_eq!(result.status, 2);
+    assert!(
+        result
+            .stderr
+            .contains("argument --state: expected one argument"),
+        "{}",
+        result.stderr
+    );
+}
+
+// WS-A45: help prints and exits 0. The top level help carries
+// the main usage and the command list; a subcommand's help
+// carries that command's usage and options. Help is a parser
+// success, not an error, and it runs before the store option
+// is required; both calls below supply no store option, so
+// that claim is exercised rather than assumed.
+#[test]
+fn cli_help_prints_the_usage_and_exits_zero() {
+    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
+        .arg("--help")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert_eq!(output.status.code().unwrap_or(-1), 0, "{stdout}");
+    assert!(
+        stdout.starts_with("usage: wayside [-h] --store STORE"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("record a new checkpoint of a session"),
+        "{stdout}"
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
+        .args(["checkpoint", "--help"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert_eq!(output.status.code().unwrap_or(-1), 0, "{stdout}");
+    assert!(
+        stdout.contains("usage: wayside checkpoint [-h] --state STATE"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("--database PATH"), "{stdout}");
+}
+
+// WS-A45: the double dash ends option parsing. A token after
+// it that looks like an option is taken as the positional it
+// stands in for, so the refusal that answers is the library's
+// name refusal at the error prefix, not the parser's
+// unrecognized arguments report.
+#[test]
+fn cli_double_dash_ends_option_parsing() {
+    let base = temp_dir("cli-separator");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    let result = run_cli(&store, &["list", "--", "-weird"]);
+    assert_eq!(result.status, 2);
+    assert!(result.stderr.starts_with("error:"), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("invalid session id '-weird'"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("unrecognized arguments"),
+        "{}",
+        result.stderr
+    );
+}
+
+// WS-A45 with WS-A26: the help texts print through the same
+// checked writer as command output, so a help print pointed at
+// an unwritable output draws the same output refusal at exit 1
+// as a failed show or list print.
+#[cfg(unix)]
+#[test]
+fn cli_help_fails_when_its_output_cannot_be_written() {
+    let base = temp_dir("cli-help-full");
+    let store = base.join("store");
+    let result = run_cli_stdout_full(&store, &["--help"]);
+    assert_eq!(result.status, 1, "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("error: the command output cannot be written"),
+        "{}",
+        result.stderr
+    );
+    let result = run_cli_stdout_full(&store, &["checkpoint", "--help"]);
+    assert_eq!(result.status, 1, "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("error: the command output cannot be written"),
+        "{}",
+        result.stderr
+    );
+}
+
 #[test]
 fn checkpoint_fails_when_a_state_subdirectory_cannot_be_listed() {
     let base = temp_dir("walk-sub-blocked");
