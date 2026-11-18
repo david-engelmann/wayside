@@ -995,6 +995,22 @@ fn planted_zero_sequence_directory_is_ignored() {
     assert_eq!(listed, [1]);
     let manifest = checkpoint(&store, "alpha", &state, None, b"").unwrap();
     assert_eq!(manifest.sequence, 2);
+    // A session holding only a complete zero checkpoint
+    // lists nothing: the enumeration the listing and the
+    // allocator share excludes zero outright, not merely
+    // beside a real checkpoint.
+    copy_tree(
+        &checkpoint_dir(&store, "alpha", 1),
+        &store
+            .join("sessions")
+            .join("zeroonly")
+            .join("checkpoints")
+            .join("000000"),
+    );
+    damage_manifest_json(&store, "zeroonly", 0, &|value| {
+        value["sequence"] = serde_json::json!(0);
+    });
+    assert!(list_checkpoints(&store, "zeroonly").unwrap().is_empty());
     // A session holding only an empty zero directory holds
     // no checkpoint, so fork into it proceeds.
     let ghost = store
