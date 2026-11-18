@@ -282,3 +282,68 @@ def test_sequence_outside_the_i64_range_is_an_invalid_name(tmp_path):
 
     with pytest.raises(wayside.InvalidNameError):
         wayside.compare(store, "alpha", 1, too_wide)
+
+
+def test_manifest_dictionaries_stand_in_the_formats_field_order(tmp_path):
+    store = str(tmp_path / "store")
+    state = tmp_path / "state"
+    data = state / "data"
+    data.mkdir(parents=True)
+    (data / "app.db").write_bytes(b"binding database main bytes")
+    (data / "app.db-wal").write_bytes(b"binding wal bytes")
+    (state / "plan.txt").write_text("first plan")
+    (state / "spool").mkdir()
+
+    first = wayside.checkpoint(
+        store, "alpha", str(state), databases=["data/app.db"]
+    )
+    assert first["format"] == "wayside-checkpoint/2"
+    assert list(first.keys()) == [
+        "created_at",
+        "databases",
+        "directories",
+        "env",
+        "files",
+        "forked_from",
+        "format",
+        "memory",
+        "sequence",
+        "session",
+    ]
+    (database,) = first["databases"]
+    assert list(database.keys()) == ["bundle_sha256", "members", "path"]
+
+
+def test_the_forked_manifest_dictionary_stands_in_the_formats_field_order(
+    tmp_path,
+):
+    import json
+
+    # The byte identity below stands on the forked manifest because
+    # it carries every field the dictionary carries. An unforked
+    # manifest's dictionary carries forked_from as None where the
+    # stored rendering omits the field, so its serialization carries
+    # one line the stored text does not.
+
+    store = str(tmp_path / "store")
+    state = tmp_path / "state"
+    data = state / "data"
+    data.mkdir(parents=True)
+    (data / "app.db").write_bytes(b"binding database main bytes")
+    (state / "plan.txt").write_text("first plan")
+    (state / "spool").mkdir()
+    wayside.checkpoint(store, "alpha", str(state), databases=["data/app.db"])
+
+    forked = wayside.fork(store, "alpha", 1, "beta")
+    assert list(forked["forked_from"].keys()) == ["sequence", "session"]
+
+    stored = (
+        tmp_path
+        / "store"
+        / "sessions"
+        / "beta"
+        / "checkpoints"
+        / "000001"
+        / "manifest.json"
+    ).read_text()
+    assert json.dumps(forked, indent=2) + "\n" == stored
