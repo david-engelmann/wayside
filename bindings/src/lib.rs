@@ -82,26 +82,22 @@ fn sequence_argument(value: &Bound<'_, PyAny>, name: &str) -> PyResult<i64> {
 
 /// Translate one validated manifest into a plain dictionary
 /// carrying every field the manifest carries, in the shape of
-/// the wayside-checkpoint formats themselves. The databases
+/// the wayside-checkpoint formats themselves. The dictionaries
+/// stand in the format's own sorted field order, so a caller
+/// who serializes a returned manifest with an order preserving
+/// writer reproduces the stored rendering. The databases
 /// list stands empty for a wayside-checkpoint/1 manifest, and
 /// the directories list stands empty for a manifest that
 /// records no empty directory, as
 /// the forked_from entry stands empty for an unforked one.
 fn manifest_dict(py: Python<'_>, manifest: &Manifest) -> PyResult<Py<PyDict>> {
-    let dict = PyDict::new(py);
-    dict.set_item("format", &manifest.format)?;
-    dict.set_item("session", &manifest.session)?;
-    dict.set_item("sequence", manifest.sequence)?;
-    dict.set_item("created_at", &manifest.created_at)?;
     let env = PyDict::new(py);
     for (key, value) in &manifest.env {
         env.set_item(key, value)?;
     }
-    dict.set_item("env", env)?;
     let memory = PyDict::new(py);
     memory.set_item("sha256", &manifest.memory.sha256)?;
     memory.set_item("size", manifest.memory.size)?;
-    dict.set_item("memory", memory)?;
     let mut files = Vec::new();
     for entry in &manifest.files {
         let file = PyDict::new(py);
@@ -110,12 +106,8 @@ fn manifest_dict(py: Python<'_>, manifest: &Manifest) -> PyResult<Py<PyDict>> {
         file.set_item("size", entry.size)?;
         files.push(file.unbind());
     }
-    dict.set_item("files", files)?;
     let mut databases = Vec::new();
     for entry in &manifest.databases {
-        let database = PyDict::new(py);
-        database.set_item("path", &entry.path)?;
-        database.set_item("bundle_sha256", &entry.bundle_sha256)?;
         let mut members = Vec::new();
         for member in &entry.members {
             let member_dict = PyDict::new(py);
@@ -124,21 +116,32 @@ fn manifest_dict(py: Python<'_>, manifest: &Manifest) -> PyResult<Py<PyDict>> {
             member_dict.set_item("size", member.size)?;
             members.push(member_dict.unbind());
         }
+        let database = PyDict::new(py);
+        database.set_item("bundle_sha256", &entry.bundle_sha256)?;
         database.set_item("members", members)?;
+        database.set_item("path", &entry.path)?;
         databases.push(database.unbind());
     }
-    dict.set_item("databases", databases)?;
-    dict.set_item("directories", &manifest.directories)?;
     let forked_from = match &manifest.forked_from {
         Some(lineage) => {
             let fork = PyDict::new(py);
-            fork.set_item("session", &lineage.session)?;
             fork.set_item("sequence", lineage.sequence)?;
+            fork.set_item("session", &lineage.session)?;
             Some(fork.unbind())
         }
         None => None,
     };
+    let dict = PyDict::new(py);
+    dict.set_item("created_at", &manifest.created_at)?;
+    dict.set_item("databases", databases)?;
+    dict.set_item("directories", &manifest.directories)?;
+    dict.set_item("env", env)?;
+    dict.set_item("files", files)?;
     dict.set_item("forked_from", forked_from)?;
+    dict.set_item("format", &manifest.format)?;
+    dict.set_item("memory", memory)?;
+    dict.set_item("sequence", manifest.sequence)?;
+    dict.set_item("session", &manifest.session)?;
     Ok(dict.unbind())
 }
 
