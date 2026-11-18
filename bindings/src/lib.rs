@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use pyo3::create_exception;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDict, PyLong};
+use pyo3::types::{PyBool, PyDict, PyInt};
 
 use wayside_core::{CheckpointInfo, Comparison, DatabaseStanding, Error, Manifest};
 
@@ -69,7 +69,7 @@ fn sequence_argument(value: &Bound<'_, PyAny>, name: &str) -> PyResult<i64> {
             // so it draws the invalid sequence refusal above
             // (WS-A50). Any other type keeps the TypeError its
             // extraction raised.
-            if value.is_instance_of::<PyLong>() {
+            if value.is_instance_of::<PyInt>() {
                 InvalidNameError::new_err(format!(
                     "invalid sequence {value}, use a positive integer"
                 ))
