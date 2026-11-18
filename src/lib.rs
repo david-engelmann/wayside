@@ -2280,6 +2280,16 @@ fn bound_error(rel: &str) -> Error {
     ))
 }
 
+/// The changed during capture refusal of WS-13 (WS-A42): the
+/// one statement of the text the bundle pass and the two pass
+/// agreement judgement in checkpoint_inner share.
+fn changed_during_capture(rel: &str) -> Error {
+    Error::wayside(format!(
+        "the database at {rel} changed during capture, so the \
+         checkpoint is refused"
+    ))
+}
+
 /// The state directory path a recorded relative path names.
 fn join_rel(base: &Path, rel: &str) -> PathBuf {
     let mut path = base.to_path_buf();
@@ -2317,12 +2327,6 @@ fn read_bundle_pass(
     declared_rel: &str,
     reader: &StateTreeReader,
 ) -> Result<Vec<(String, Vec<u8>)>> {
-    let changed = || {
-        Error::wayside(format!(
-            "the database at {declared_rel} changed during capture, so the \
-             checkpoint is refused"
-        ))
-    };
     let mut members: Vec<(String, Vec<u8>)> = Vec::new();
     let mut total: u128 = 0;
     let names = bundle_names(declared_rel);
@@ -2336,13 +2340,15 @@ fn read_bundle_pass(
             }
             Ok(None) => {
                 if index == 0 {
-                    return Err(changed());
+                    return Err(changed_during_capture(declared_rel));
                 }
                 continue;
             }
-            Err(_) => return Err(changed()),
+            Err(_) => return Err(changed_during_capture(declared_rel)),
         }
-        let data = reader.read_bytes(&member_path).map_err(|_| changed())?;
+        let data = reader
+            .read_bytes(&member_path)
+            .map_err(|_| changed_during_capture(declared_rel))?;
         total += data.len() as u128;
         if total > BUNDLE_BOUND as u128 {
             return Err(bound_error(declared_rel));
@@ -2523,10 +2529,7 @@ fn checkpoint_inner(
         let second = read_bundle_pass(state_dir, rel, reader)?;
         let first_hashes: Vec<String> = first.iter().map(|(_, data)| sha256_hex(data)).collect();
         if !readings_agree(&first, &first_hashes, &second) {
-            return Err(Error::wayside(format!(
-                "the database at {rel} changed during capture, so the \
-                 checkpoint is refused"
-            )));
+            return Err(changed_during_capture(rel));
         }
         bundles.push((rel.clone(), first, first_hashes));
     }
