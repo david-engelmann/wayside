@@ -14,6 +14,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use sha2::{Digest, Sha256};
+mod common;
+
+fn temp_dir(tag: &str) -> PathBuf {
+    common::temp_dir("wayside-setup-test", tag)
+}
 
 const MARKER: &str = "<!-- repo annex below this line -->";
 const GATE_COMMAND: &str = "cargo test";
@@ -27,13 +32,6 @@ fn root() -> PathBuf {
 
 fn read(name: &str) -> String {
     std::fs::read_to_string(root().join(name)).unwrap()
-}
-
-fn temp_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("wayside-setup-test-{}-{tag}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
 }
 
 #[test]
