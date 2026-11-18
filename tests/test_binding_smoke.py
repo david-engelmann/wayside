@@ -255,3 +255,30 @@ def test_the_directories_lifecycle_through_the_binding(tmp_path):
     plain = wayside.checkpoint(store, "alpha", str(plain_state))
     assert plain["format"] == "wayside-checkpoint/1"
     assert plain["directories"] == []
+
+def test_sequence_outside_the_i64_range_is_an_invalid_name(tmp_path):
+    store = str(tmp_path / "store")
+    state = tmp_path / "state"
+    write_state(state, "first plan")
+    wayside.checkpoint(store, "alpha", str(state))
+
+    too_wide = 2**70
+    with pytest.raises(wayside.InvalidNameError) as shown:
+        wayside.show(store, "alpha", too_wide)
+    assert str(shown.value) == (
+        f"invalid sequence {too_wide}, use a positive integer"
+    )
+
+    with pytest.raises(wayside.InvalidNameError) as negative:
+        wayside.show(store, "alpha", -too_wide)
+    assert str(negative.value) == (
+        f"invalid sequence {-too_wide}, use a positive integer"
+    )
+
+    target = tmp_path / "target"
+    with pytest.raises(wayside.InvalidNameError):
+        wayside.restore(store, "alpha", too_wide, str(target))
+    assert not target.exists()
+
+    with pytest.raises(wayside.InvalidNameError):
+        wayside.compare(store, "alpha", 1, too_wide)
