@@ -1645,6 +1645,43 @@ fn load_manifest(root: &Path, session: &str, sequence: i64) -> Result<Manifest> 
     validate_manifest(&data, &path, session, sequence)
 }
 
+/// Read one recorded byte string from its path inside a
+/// checkpoint and check it against its recorded hash and
+/// size. The subject phrase names the byte string in the
+/// refusal tails: the payload for a recorded path, or the
+/// memory document.
+fn read_recorded(
+    path: &Path,
+    session: &str,
+    sequence: i64,
+    subject: &str,
+    sha256: &str,
+    size: i128,
+) -> Result<Vec<u8>> {
+    if !path.is_file() {
+        return Err(corrupt_checkpoint(
+            session,
+            sequence,
+            &format!("{subject} is missing"),
+        ));
+    }
+    let data = fs::read(path).map_err(|exc| {
+        corrupt_checkpoint(
+            session,
+            sequence,
+            &format!("{subject} cannot be read, {exc}"),
+        )
+    })?;
+    if data.len() as i128 != size || sha256_hex(&data) != sha256 {
+        return Err(corrupt_checkpoint(
+            session,
+            sequence,
+            &format!("{subject} does not match its recorded hash and size"),
+        ));
+    }
+    Ok(data)
+}
+
 /// Read one payload of a checkpoint from its files area and
 /// check it against its recorded hash and size.
 fn read_payload(
@@ -1655,29 +1692,14 @@ fn read_payload(
     sha256: &str,
     size: i128,
 ) -> Result<Vec<u8>> {
-    let payload = join_rel(&ck.join(FILES_NAME), rel);
-    if !payload.is_file() {
-        return Err(corrupt_checkpoint(
-            session,
-            sequence,
-            &format!("the payload for {rel} is missing"),
-        ));
-    }
-    let data = fs::read(&payload).map_err(|exc| {
-        corrupt_checkpoint(
-            session,
-            sequence,
-            &format!("the payload for {rel} cannot be read, {exc}"),
-        )
-    })?;
-    if data.len() as i128 != size || sha256_hex(&data) != sha256 {
-        return Err(corrupt_checkpoint(
-            session,
-            sequence,
-            &format!("the payload for {rel} does not match its recorded hash and size"),
-        ));
-    }
-    Ok(data)
+    read_recorded(
+        &join_rel(&ck.join(FILES_NAME), rel),
+        session,
+        sequence,
+        &format!("the payload for {rel}"),
+        sha256,
+        size,
+    )
 }
 
 /// Read every payload of a checkpoint and check it against the
@@ -1719,29 +1741,14 @@ fn read_verified(
             entries.push((member.path.clone(), data));
         }
     }
-    let memory_path = ck.join(MEMORY_NAME);
-    if !memory_path.is_file() {
-        return Err(corrupt_checkpoint(
-            session,
-            sequence,
-            "the memory document is missing",
-        ));
-    }
-    let memory = fs::read(&memory_path).map_err(|exc| {
-        corrupt_checkpoint(
-            session,
-            sequence,
-            &format!("the memory document cannot be read, {exc}"),
-        )
-    })?;
-    if memory.len() as i128 != manifest.memory.size || sha256_hex(&memory) != manifest.memory.sha256
-    {
-        return Err(corrupt_checkpoint(
-            session,
-            sequence,
-            "the memory document does not match its recorded hash and size",
-        ));
-    }
+    let memory = read_recorded(
+        &ck.join(MEMORY_NAME),
+        session,
+        sequence,
+        "the memory document",
+        &manifest.memory.sha256,
+        manifest.memory.size,
+    )?;
     Ok((entries, memory))
 }
 
