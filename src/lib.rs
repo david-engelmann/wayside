@@ -267,7 +267,7 @@ fn validate_env(env: &BTreeMap<String, String>) -> Result<()> {
 /// lands in the Float variant and fails every integer check, as
 /// it did under the Python type checks.
 #[derive(Debug, Clone, PartialEq)]
-pub enum StrictValue {
+enum StrictValue {
     Null,
     Bool(bool),
     Int(i128),
