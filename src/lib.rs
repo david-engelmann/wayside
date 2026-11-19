@@ -1084,7 +1084,7 @@ fn validate_manifest(
                 && object_get(pairs, "sequence").is_some() =>
         {
             let fork_session = match object_get(pairs, "session") {
-                Some(StrictValue::Str(text)) => text.clone(),
+                Some(StrictValue::Str(text)) if validate_session_id(text).is_ok() => text.clone(),
                 _ => {
                     return Err(corrupt(
                         path,
@@ -1092,12 +1092,6 @@ fn validate_manifest(
                     ))
                 }
             };
-            if validate_session_id(&fork_session).is_err() {
-                return Err(corrupt(
-                    path,
-                    "the forked_from session is not a safe session id",
-                ));
-            }
             let fork_sequence = match object_get(pairs, "sequence") {
                 Some(StrictValue::Int(number)) if *number >= 1 => *number,
                 _ => {
