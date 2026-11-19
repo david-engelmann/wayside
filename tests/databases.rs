@@ -1758,6 +1758,66 @@ fn compare_reports_each_database_path_in_order() {
     );
 }
 
+// WS-A69: compare's missing checkpoint refusal. Compare
+// loads the first manifest and then the second, so a
+// missing checkpoint draws load_manifest's NotFound refusal
+// naming that checkpoint, and when both are missing the
+// refusal names the first. The pins below stage a session
+// holding checkpoint 1 alone. The both missing pin answers
+// the plausible wrong form of a swap of the two load lines,
+// which would name 8 where the standing order names 9, and
+// the one side pins hold the refusal's class and text
+// against a compare reworked to judge presence before
+// loading, which would change the refusal's class or text.
+
+#[test]
+fn compare_with_a_missing_second_checkpoint_is_not_found() {
+    let base = temp_dir("compare-missing-second");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("app.db", b"main")]);
+    db_checkpoint(&store, "alpha", &state, &["app.db"]).unwrap();
+    let error = expect_error(compare_checkpoints(&store, "alpha", 1, 9));
+    assert!(matches!(error, Error::NotFound(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("session alpha holds no checkpoint 9 in the store at"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn compare_with_a_missing_first_checkpoint_is_not_found() {
+    let base = temp_dir("compare-missing-first");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("app.db", b"main")]);
+    db_checkpoint(&store, "alpha", &state, &["app.db"]).unwrap();
+    let error = expect_error(compare_checkpoints(&store, "alpha", 9, 1));
+    assert!(matches!(error, Error::NotFound(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("session alpha holds no checkpoint 9 in the store at"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn compare_with_both_checkpoints_missing_names_the_first() {
+    let base = temp_dir("compare-missing-both");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("app.db", b"main")]);
+    db_checkpoint(&store, "alpha", &state, &["app.db"]).unwrap();
+    let error = expect_error(compare_checkpoints(&store, "alpha", 9, 8));
+    assert!(matches!(error, Error::NotFound(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("session alpha holds no checkpoint 9 in the store at"),
+        "{error:?}"
+    );
+}
+
 // The command line surface of the slice.
 
 #[test]
@@ -1869,6 +1929,31 @@ fn cli_verify_and_compare_lines() {
     let empty = run_cli(&store, &["compare", "alpha", "1", "1"]);
     assert_eq!(empty.status, 0, "{}", empty.stderr);
     assert_eq!(empty.stdout, "");
+}
+
+// WS-A69: the command line compare against a missing
+// checkpoint draws the library's NotFound refusal at exit
+// 2, naming the missing sequence.
+
+#[test]
+fn cli_compare_against_a_missing_checkpoint_is_refused() {
+    let base = temp_dir("cli-compare-missing");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("app.db", b"cli main")]);
+    let recorded = run_cli(
+        &store,
+        &["checkpoint", "alpha", "--state", state.to_str().unwrap()],
+    );
+    assert_eq!(recorded.status, 0, "{}", recorded.stderr);
+    let missing = run_cli(&store, &["compare", "alpha", "1", "9"]);
+    assert_eq!(missing.status, 2, "{}", missing.stderr);
+    assert!(
+        missing
+            .stderr
+            .contains("session alpha holds no checkpoint 9 in the store at"),
+        "{}",
+        missing.stderr
+    );
 }
 
 #[test]
