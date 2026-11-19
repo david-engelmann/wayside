@@ -893,10 +893,11 @@ fn validate_directories(
                 &format!("the directory {directory} stands above a database member"),
             ));
         }
-        if directory
-            .match_indices('/')
-            .any(|(index, _)| file_paths.binary_search(&directory[..index]).is_ok())
-        {
+        if directory.match_indices('/').any(|(index, _)| {
+            file_paths
+                .binary_search_by(|file| file.as_str().cmp(&directory[..index]))
+                .is_ok()
+        }) {
             return Err(corrupt(
                 path,
                 &format!("the directory {directory} stands below a recorded file"),
