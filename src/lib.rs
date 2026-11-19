@@ -846,6 +846,18 @@ fn validate_directories(
         .iter()
         .flat_map(|database| database.members.iter().map(|member| member.path.as_str()))
         .collect();
+    // The stands below judgements are decided by a
+    // directory's ancestors, its prefixes cut at the slash
+    // boundaries: a recorded path stands above the directory
+    // exactly when it equals one of them. The file list
+    // stands in path order here, refused otherwise by
+    // validate_manifest before this call, so each ancestor
+    // is answered by binary search, and the member paths
+    // stand in bundle order, so they are gathered once here
+    // into a set of the same slices (WS-A65). The standing
+    // form scanned both lists for every directory and built
+    // a candidate prefix string for each pair it tested.
+    let member_path_set: BTreeSet<&str> = member_paths.iter().copied().collect();
     for directory in &directories {
         if file_paths.iter().any(|file| file == directory) {
             return Err(corrupt(
@@ -881,18 +893,19 @@ fn validate_directories(
                 &format!("the directory {directory} stands above a database member"),
             ));
         }
-        if file_paths
-            .iter()
-            .any(|file| directory.starts_with(&format!("{file}/")))
-        {
+        if directory.match_indices('/').any(|(index, _)| {
+            file_paths
+                .binary_search_by(|file| file.as_str().cmp(&directory[..index]))
+                .is_ok()
+        }) {
             return Err(corrupt(
                 path,
                 &format!("the directory {directory} stands below a recorded file"),
             ));
         }
-        if member_paths
-            .iter()
-            .any(|member| directory.starts_with(&format!("{member}/")))
+        if directory
+            .match_indices('/')
+            .any(|(index, _)| member_path_set.contains(&directory[..index]))
         {
             return Err(corrupt(
                 path,
