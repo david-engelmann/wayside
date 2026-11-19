@@ -4,7 +4,7 @@
 //! U+2013 in every file under the scan root and exits 1 when either
 //! count is nonzero. What it counts, the counts it prints, the
 //! directory names it excludes below the scan root, and the binary
-//! suffixes it skips match the setup scanner, and four differences
+//! suffixes it skips match the setup scanner, and five differences
 //! from that scanner stand named here as deliberate behaviour of
 //! the port. The excluded directory names add target, the cargo
 //! output directory, because in a Rust repo that is the generated
@@ -18,7 +18,7 @@
 //! error at exit 2, where the setup scanner let the failure escape
 //! as a traceback at exit 1. A scan output that cannot be
 //! written is a scan error at exit 2 in the same shape, never
-//! a panic. One further difference stands for
+//! a panic. The fifth difference stands for
 //! this repo alone: the binary suffix list adds bin, because the
 //! repo holds a recorded binary payload inside its checkpoint
 //! fixtures, and a file with that suffix is binary by the same
