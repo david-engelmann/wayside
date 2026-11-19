@@ -2893,3 +2893,79 @@ fn session_id_carrying_a_c1_control_is_refused_with_the_escape_in_the_message() 
         error.message()
     );
 }
+
+// WS-A63: the help flag in the equals form. The help flag
+// takes no argument, so a value riding on the token in the
+// equals form is refused at exit 2 with the reference
+// parser's ignored explicit argument message, at the top
+// level and in a subcommand alike, through the exact name
+// and through an unambiguous prefix. On the code this pin
+// was written against, both levels discarded the value and
+// printed the help text at exit 0. A repair refusing the
+// shape at only one level fails the other pin, and a repair
+// refusing every equals form fails WS-A45's equals pins.
+
+#[test]
+fn cli_help_flag_with_an_equals_value_is_refused_at_the_top_level() {
+    let base = temp_dir("cli-help-equals-top");
+    let store = base.join("store");
+    // Without the store option: help is a parser matter and
+    // runs before the store is required, so the refusal
+    // answers here too.
+    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
+        .arg("--help=x")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(output.status.code().unwrap_or(-1), 2, "{stderr}");
+    assert!(stderr.starts_with("usage: wayside"), "{stderr}");
+    assert!(
+        stderr.contains("argument -h/--help: ignored explicit argument 'x'"),
+        "{stderr}"
+    );
+    // With the store option standing, the exact name and an
+    // unambiguous prefix refuse the same way, and an empty
+    // value names the empty string.
+    for (token, rendered) in [("--help=x", "'x'"), ("--hel=x", "'x'"), ("--help=", "''")] {
+        let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
+            .arg("--store")
+            .arg(&store)
+            .arg(token)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert_eq!(output.status.code().unwrap_or(-1), 2, "{token}: {stderr}");
+        assert!(stderr.starts_with("usage: wayside"), "{token}: {stderr}");
+        let message = format!("argument -h/--help: ignored explicit argument {rendered}");
+        assert!(stderr.contains(&message), "{token}: {stderr}");
+        assert!(output.stdout.is_empty(), "{token}: help printed");
+    }
+    assert!(!store.exists());
+}
+
+#[test]
+fn cli_help_flag_with_an_equals_value_is_refused_in_a_subcommand() {
+    let base = temp_dir("cli-help-equals-sub");
+    let store = base.join("store");
+    for (command, usage) in [
+        ("list", "usage: wayside list"),
+        ("checkpoint", "usage: wayside checkpoint"),
+    ] {
+        let result = run_cli(&store, &[command, "--help=x"]);
+        assert_eq!(result.status, 2, "{command}: {}", result.stderr);
+        assert!(
+            result.stderr.contains(usage),
+            "{command}: {}",
+            result.stderr
+        );
+        assert!(
+            result
+                .stderr
+                .contains("argument -h/--help: ignored explicit argument 'x'"),
+            "{command}: {}",
+            result.stderr
+        );
+        assert!(result.stdout.is_empty(), "{command}: help printed");
+    }
+    assert!(!store.exists());
+}
