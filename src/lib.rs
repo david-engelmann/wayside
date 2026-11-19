@@ -2440,10 +2440,11 @@ pub fn checkpoint_with_reader(
 /// Record a new checkpoint declaring database bundles
 /// (WS-11). Each declared path names a file inside the state
 /// directory whose bundle is captured under the consistency
-/// proof of WS-13, and the checkpoint is recorded in
-/// wayside-checkpoint/2. With no declaration the result is a
-/// wayside-checkpoint/1 checkpoint, byte for byte as the
-/// landed checkpoint writes it.
+/// proof of WS-13. The checkpoint is recorded in
+/// wayside-checkpoint/2 when it declares a database or records
+/// an empty directory, and in wayside-checkpoint/1 otherwise
+/// (WS-21). With no declaration the call writes byte for byte
+/// what the landed checkpoint writes.
 pub fn checkpoint_with_databases(
     store: &Path,
     session: &str,
