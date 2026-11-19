@@ -1930,6 +1930,96 @@ fn cli_sequence_errors_share_the_invalid_name_exit_code() {
     assert!(!target.exists());
 }
 
+// WS-A8, the accepted shapes: the sequence argument's parser
+// takes the shapes Python's int conversion takes, an optional
+// sign, a leading zero, single underscores between digits,
+// and padding by the six ASCII whitespace characters, and
+// those shapes stand pinned here beside the refusal pins.
+// On a parser simplified to a plain integer parse, every
+// spelling below is refused and this pin fails.
+
+#[test]
+fn cli_sequence_accepts_the_python_int_ascii_shapes() {
+    let base = temp_dir("cli-sequence-shapes");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    let result = run_cli(
+        &store,
+        &["checkpoint", "alpha", "--state", state.to_str().unwrap()],
+    );
+    assert_eq!(result.status, 0, "{}", result.stderr);
+    for spelling in ["+1", "01", " 1", "1 ", "\t1", "1\n", "\r1", "\u{b}1\u{c}"] {
+        let shown = run_cli(&store, &["show", "alpha", spelling]);
+        assert_eq!(shown.status, 0, "{spelling:?}: {}", shown.stderr);
+        let value: serde_json::Value = serde_json::from_str(&shown.stdout).unwrap();
+        assert_eq!(value["sequence"].as_i64(), Some(1), "{spelling:?}");
+    }
+    // The underscore shape names the value it spells: 1_0 is
+    // checkpoint 10, which the session does not hold, so the
+    // refusal that answers is the not found refusal for 10,
+    // not the parser's invalid sequence refusal.
+    let shown = run_cli(&store, &["show", "alpha", "1_0"]);
+    assert_eq!(shown.status, 2);
+    assert!(
+        shown
+            .stderr
+            .contains("holds no checkpoint 10 in the store at "),
+        "{}",
+        shown.stderr
+    );
+    assert!(
+        !shown.stderr.contains("invalid sequence"),
+        "{}",
+        shown.stderr
+    );
+}
+
+// WS-A8, the near misses: the shapes the parser refuses at
+// its own site, each drawing the quoted invalid sequence
+// message the parse refusal carries, where a value the
+// parser accepts and the library's judgement refuses draws
+// the unquoted one. On a parser whose underscore arm is
+// loosened, the underscore shapes below are accepted and
+// this pin fails.
+
+#[test]
+fn cli_sequence_refuses_the_python_int_near_misses() {
+    let base = temp_dir("cli-sequence-misses");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    let result = run_cli(
+        &store,
+        &["checkpoint", "alpha", "--state", state.to_str().unwrap()],
+    );
+    assert_eq!(result.status, 0, "{}", result.stderr);
+    for spelling in ["1__0", "_1", "1_", "+_1", "1 0", ""] {
+        let shown = run_cli(&store, &["show", "alpha", spelling]);
+        assert_eq!(shown.status, 2, "{spelling:?}");
+        let message = format!("invalid sequence '{spelling}', use a positive integer");
+        assert!(
+            shown.stderr.contains(&message),
+            "{spelling:?}: {}",
+            shown.stderr
+        );
+    }
+    // A negative value parses and is refused by the value
+    // judgement instead, with the unquoted message.
+    let shown = run_cli(&store, &["show", "alpha", "-1"]);
+    assert_eq!(shown.status, 2);
+    assert!(
+        shown
+            .stderr
+            .contains("invalid sequence -1, use a positive integer"),
+        "{}",
+        shown.stderr
+    );
+    assert!(
+        !shown.stderr.contains("invalid sequence '"),
+        "{}",
+        shown.stderr
+    );
+}
+
 // WS-A45: the parser's equals form. An option's value may ride
 // on the option token itself, split at the first equals sign,
 // and --env keeps everything after its own first equals sign as
