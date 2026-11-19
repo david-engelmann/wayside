@@ -1852,6 +1852,13 @@ fn cli_verify_and_compare_lines() {
     assert_eq!(third.status, 0, "{}", third.stderr);
     let different = run_cli(&store, &["compare", "alpha", "2", "3"]);
     assert_eq!(different.stdout, "app.db different\n");
+    // WS-A61: the one sided line naming the first checkpoint,
+    // the one compare line shape no other assertion in this
+    // pin produces, so an interpolation swapped to the second
+    // checkpoint's number fails here.
+    let first_only = run_cli(&store, &["compare", "alpha", "3", "1"]);
+    assert_eq!(first_only.status, 0, "{}", first_only.stderr);
+    assert_eq!(first_only.stdout, "app.db recorded on checkpoint 3 only\n");
     let fourth = run_cli(
         &store,
         &[
