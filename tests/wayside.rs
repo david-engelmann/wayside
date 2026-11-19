@@ -2969,3 +2969,59 @@ fn cli_help_flag_with_an_equals_value_is_refused_in_a_subcommand() {
     }
     assert!(!store.exists());
 }
+
+// WS-A66: the forked_from session judgement stated once. A
+// recorded fork session draws the one corrupt refusal naming
+// it not a safe session id in two shapes, a value that is not
+// text and a text that fails the session id rule, and the two
+// pins below stage one shape each by editing a forked
+// checkpoint's manifest in place. Each pin answers a plausible
+// wrong form of a repair at this seat. A validator that checks
+// only that the value is text loads the first manifest, and a
+// validator that applies the session rule to text alone and
+// passes any other value through loads the second. Both pins
+// pass on the standing code, whose two step form refuses each
+// shape with the same refusal.
+#[test]
+fn a_forked_manifest_naming_an_unsafe_fork_session_is_refused() {
+    let base = temp_dir("fork-session-unsafe");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    fork(&store, "alpha", 1, "beta").unwrap();
+    let manifest_path = checkpoint_dir(&store, "beta", 1).join("manifest.json");
+    let text = std::fs::read_to_string(&manifest_path).unwrap();
+    let edited = text.replace("\"session\": \"alpha\"", "\"session\": \"Bad Name\"");
+    assert_ne!(edited, text);
+    std::fs::write(&manifest_path, edited).unwrap();
+    let error = expect_error(show(&store, "beta", 1));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("the forked_from session is not a safe session id"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_forked_manifest_naming_a_non_text_fork_session_is_refused() {
+    let base = temp_dir("fork-session-non-text");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    fork(&store, "alpha", 1, "beta").unwrap();
+    let manifest_path = checkpoint_dir(&store, "beta", 1).join("manifest.json");
+    let text = std::fs::read_to_string(&manifest_path).unwrap();
+    let edited = text.replace("\"session\": \"alpha\"", "\"session\": 7");
+    assert_ne!(edited, text);
+    std::fs::write(&manifest_path, edited).unwrap();
+    let error = expect_error(show(&store, "beta", 1));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("the forked_from session is not a safe session id"),
+        "{error:?}"
+    );
+}
