@@ -139,10 +139,21 @@ fn print_output(text: &str) -> Result<(), ScanError> {
 }
 
 fn main() -> ExitCode {
-    let root = std::env::args_os()
-        .nth(1)
+    // The scan takes one root argument (WS-A53): an argument
+    // past the root is refused as a scan error before any
+    // scan, rather than standing unread, so a caller naming
+    // two roots never scans only the first believing both
+    // stood covered.
+    let mut arguments = std::env::args_os().skip(1);
+    let root = arguments
+        .next()
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
+    if arguments.next().is_some() {
+        let mut err_out = std::io::stderr();
+        let _ = writeln!(err_out, "scan error, the scan takes one root argument");
+        return ExitCode::from(2);
+    }
     match scan(&root) {
         Ok((em_count, en_count, lines)) => {
             let counts =
