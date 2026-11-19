@@ -833,3 +833,98 @@ fn fixture_directories() {
     assert_eq!(fourth.directories, vec!["fresh".to_string()]);
     assert_eq!(list_checkpoints(&grown, "alpha").unwrap().len(), 4);
 }
+
+// WS-A65, the stands below judgements at depth.
+
+/// WS-A65: a recorded directory standing two components
+/// below a recorded file is refused at read. The pin
+/// passes on the scanning form the repair replaces and on
+/// the repaired form, and it fails on the repair's
+/// plausible wrong form, the form that tests only a
+/// directory's immediate parent against the recorded sets,
+/// which finds plan.txt/sub standing in no recorded set
+/// and accepts what the contract refuses.
+#[test]
+fn directory_below_a_recorded_file_at_depth_two_is_refused() {
+    let (_base, store) = directories_store("damage-below-file-deep");
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["directories"] = serde_json::json!(["plan.txt/sub/deep"]);
+    });
+    expect_corrupt(&store);
+}
+
+/// WS-A65: a recorded directory standing two components
+/// below a database member is refused at read, the member
+/// side of the same judgement, guarded the same way. It
+/// passes on the scanning form and on the repaired form,
+/// and it fails on the form that tests only the immediate
+/// parent, which finds data/app.db/sub standing in no
+/// recorded set and accepts.
+#[test]
+fn directory_below_a_database_member_at_depth_two_is_refused() {
+    let base = temp_dir("damage-below-member-deep");
+    let store = base.join("store");
+    let state = make_state(
+        &base.join("state"),
+        &[
+            ("plan.txt", b"first plan\n"),
+            ("data/app.db", b"synthetic database main bytes"),
+        ],
+    );
+    make_dirs(&state, &["spool"]);
+    db_checkpoint(&store, "alpha", &state, &["data/app.db"]).unwrap();
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["directories"] = serde_json::json!(["data/app.db/sub/deep"]);
+    });
+    expect_corrupt(&store);
+}
+
+/// WS-A65: a recorded directory whose first component
+/// shares a name prefix with a recorded file, plan.txt.bak
+/// beside the recorded plan.txt, loads with the directory
+/// standing, the slash boundary being the whole judgement.
+/// The pin passes on the scanning form and on the repaired
+/// form, and it fails on the boundary less wrong form, a
+/// starts_with test without the slash, which refuses the
+/// directory against plan.txt.
+#[test]
+fn directory_sharing_a_name_prefix_with_a_recorded_file_is_accepted() {
+    let (_base, store) = directories_store("prefix-name");
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["directories"] = serde_json::json!(["plan.txt.bak/sub"]);
+    });
+    let shown = show(&store, "alpha", 1).unwrap();
+    assert_eq!(shown.directories, vec!["plan.txt.bak/sub".to_string()]);
+}
+
+/// WS-A65: a recorded directory standing above one
+/// recorded file and below another draws the above
+/// refusal, the judgement order the repair preserves. The
+/// pin passes on the scanning form and on the repaired
+/// form, and it fails on the arm reordered wrong form, the
+/// below judgements moved ahead of the above ones, which
+/// draws the below refusal instead. The files list is
+/// damaged beside the directories list because no state
+/// tree holds both a and a/b/c as files.
+#[test]
+fn directory_above_and_below_recorded_files_draws_the_above_refusal() {
+    let (_base, store) = directories_store("damage-above-and-below");
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        let entry = value["files"][0].clone();
+        let mut first = entry.clone();
+        first["path"] = serde_json::json!("a");
+        let mut second = entry;
+        second["path"] = serde_json::json!("a/b/c");
+        value["files"] = serde_json::json!([first, second]);
+        value["directories"] = serde_json::json!(["a/b"]);
+    });
+    let error = expect_error(show(&store, "alpha", 1));
+    assert_eq!(error.exit_code(), 2, "{}", error.message());
+    assert!(
+        error
+            .message()
+            .contains("the directory a/b stands above a recorded file"),
+        "{}",
+        error.message()
+    );
+}
