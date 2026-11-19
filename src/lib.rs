@@ -842,12 +842,21 @@ fn validate_directories(
             "the directory entries are not in path order or repeat a path",
         ));
     }
-    let member_paths: Vec<&str> = databases
+    // The files list stands in path order here, refused
+    // otherwise by validate_manifest before this call, and
+    // the member paths are sorted once here, so each
+    // judgement below is decided by the first path at or
+    // after the directory or its prefix: if that path is
+    // not the directory and does not carry the prefix, no
+    // later path does (WS-A36). The standing form scanned
+    // both lists for every directory.
+    let mut member_paths: Vec<&str> = databases
         .iter()
         .flat_map(|database| database.members.iter().map(|member| member.path.as_str()))
         .collect();
+    member_paths.sort_unstable();
     for directory in &directories {
-        if file_paths.iter().any(|file| file == directory) {
+        if file_paths.binary_search(directory).is_ok() {
             return Err(corrupt(
                 path,
                 &format!(
@@ -856,7 +865,7 @@ fn validate_directories(
                 ),
             ));
         }
-        if member_paths.iter().any(|member| member == directory) {
+        if member_paths.binary_search(&directory.as_str()).is_ok() {
             return Err(corrupt(
                 path,
                 &format!(
@@ -866,15 +875,20 @@ fn validate_directories(
             ));
         }
         let prefix = format!("{directory}/");
-        if file_paths.iter().any(|file| file.starts_with(&prefix)) {
+        let first_file = file_paths.partition_point(|file| file.as_str() < prefix.as_str());
+        if file_paths
+            .get(first_file)
+            .is_some_and(|file| file.starts_with(prefix.as_str()))
+        {
             return Err(corrupt(
                 path,
                 &format!("the directory {directory} stands above a recorded file"),
             ));
         }
+        let first_member = member_paths.partition_point(|member| *member < prefix.as_str());
         if member_paths
-            .iter()
-            .any(|member| member.starts_with(&prefix))
+            .get(first_member)
+            .is_some_and(|member| member.starts_with(prefix.as_str()))
         {
             return Err(corrupt(
                 path,
@@ -2575,13 +2589,28 @@ fn checkpoint_inner(
     // below it, and the recorded payloads are the file entries
     // of the manifest and the members of its bundles, so the
     // judgement runs on the payload set and the member set,
-    // with the -shm companions already out of both.
+    // with the -shm companions already out of both. The
+    // payload set stands in path order here, the walked
+    // entries sorted and the filter above preserving their
+    // order, and the member set is a BTreeSet, so each
+    // judgement is decided by the first payload at or after
+    // the directory's prefix and the first member at or
+    // after it: if neither carries the prefix, no later one
+    // does (WS-A36). The standing form scanned both sets
+    // for every directory.
     let recorded_directories: Vec<String> = walked_directories
         .iter()
         .filter(|directory| {
             let prefix = format!("{directory}/");
-            !payloads.iter().any(|(rel, _)| rel.starts_with(&prefix))
-                && !member_paths.iter().any(|rel| rel.starts_with(&prefix))
+            let first_payload = payloads.partition_point(|(rel, _)| rel.as_str() < prefix.as_str());
+            let payload_below = payloads
+                .get(first_payload)
+                .is_some_and(|(rel, _)| rel.starts_with(prefix.as_str()));
+            let member_below = member_paths
+                .range(prefix.clone()..)
+                .next()
+                .is_some_and(|rel| rel.starts_with(prefix.as_str()));
+            !payload_below && !member_below
         })
         .cloned()
         .collect();
