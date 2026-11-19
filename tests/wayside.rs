@@ -1961,7 +1961,9 @@ fn cli_sequence_accepts_the_python_int_ascii_shapes() {
     let shown = run_cli(&store, &["show", "alpha", "1_0"]);
     assert_eq!(shown.status, 2);
     assert!(
-        shown.stderr.contains("holds no checkpoint 10"),
+        shown
+            .stderr
+            .contains("holds no checkpoint 10 in the store at "),
         "{}",
         shown.stderr
     );
