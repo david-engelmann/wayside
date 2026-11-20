@@ -1307,6 +1307,20 @@ fn render_field(key: &str, render: impl FnOnce(&mut String)) -> String {
     field
 }
 
+/// The format a manifest's content names (WS-A72): /1 when
+/// both conditional lists stand empty, /2 when either
+/// stands. The derivation stands stated once here, where
+/// new_manifest and render_manifest once each stated it
+/// under WS-A14's discipline, so a change to the rule is
+/// taken up at this one seat or not at all.
+fn manifest_format(databases: &[DatabaseEntry], directories: &[String]) -> &'static str {
+    if databases.is_empty() && directories.is_empty() {
+        FORMAT_NAME
+    } else {
+        FORMAT_V2
+    }
+}
+
 /// Render a manifest exactly as the Python implementation's
 /// sorted, two space indented json rendering renders it, with
 /// no trailing newline. The stored manifest file carries this
@@ -1328,11 +1342,7 @@ pub fn render_manifest(manifest: &Manifest) -> String {
     // its list is non empty, so a hand built value renders
     // the content it carries under the format that content
     // names, and no field it carries is dropped.
-    let effective_format = if manifest.databases.is_empty() && manifest.directories.is_empty() {
-        FORMAT_NAME
-    } else {
-        FORMAT_V2
-    };
+    let effective_format = manifest_format(&manifest.databases, &manifest.directories);
     let mut out = String::new();
     out.push_str("{\n");
     let mut fields: Vec<String> = Vec::new();
@@ -2225,11 +2235,7 @@ fn new_manifest(
     forked_from: Option<ForkRef>,
 ) -> Manifest {
     Manifest {
-        format: if databases.is_empty() && directories.is_empty() {
-            FORMAT_NAME.to_string()
-        } else {
-            FORMAT_V2.to_string()
-        },
+        format: manifest_format(&databases, &directories).to_string(),
         session: session.to_string(),
         sequence,
         created_at: now_isoformat(),
