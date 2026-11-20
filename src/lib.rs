@@ -708,7 +708,7 @@ fn validate_databases(
                 &format!("the database at {rel} carries no members"),
             ));
         }
-        let bundle_slots = [rel.clone(), format!("{rel}-wal"), format!("{rel}-journal")];
+        let bundle_slots = bundle_names(&rel);
         let mut next_slot = 0usize;
         let mut members = Vec::new();
         for member in member_values.iter() {
