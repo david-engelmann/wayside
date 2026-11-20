@@ -1324,6 +1324,30 @@ fn rewind_refuses_the_newest_and_a_missing_sequence() {
 }
 
 #[test]
+fn rewind_refuses_a_session_holding_no_checkpoints() {
+    // WS-A76: a session directory standing with no published
+    // checkpoints draws rewind's own refusal, which names the
+    // session as holding no checkpoints. On a rewind that
+    // dropped its empty listing check, the position judgement
+    // would draw the missing sequence refusal for a session
+    // that holds no checkpoint at all, and this pin would fail.
+    let base = temp_dir("rewind-empty-session");
+    let store = base.join("store");
+    std::fs::create_dir_all(store.join("sessions").join("alpha").join("checkpoints")).unwrap();
+    let target = base.join("target");
+    let error = expect_error(rewind(&store, "alpha", 1, &target));
+    assert!(matches!(error, Error::NotFound(_)), "{error:?}");
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "session alpha holds no checkpoints in the store at {}",
+            store.display()
+        )
+    );
+    assert!(!target.exists());
+}
+
+#[test]
 fn cli_checkpoint_restore_round_trip() {
     let base = temp_dir("cli-round-trip");
     let store = base.join("store");
