@@ -507,3 +507,49 @@ fn codepoint_scan_with_both_streams_unwritable_keeps_exit_2() {
         .unwrap();
     assert_eq!(status.code().unwrap_or(-1), 2);
 }
+
+/// WS-A73: a symlink to a directory below the scan root is
+/// passed over, never followed. The link names a directory
+/// outside the root holding a dash file; a walk that
+/// classified by followed metadata would descend through
+/// the link and count that dash, and on a cyclic link would
+/// recurse without bound. The standing collect rule takes
+/// an entry only when it is a regular file or a link to
+/// one, so the scan stays inside the root it was given.
+#[cfg(unix)]
+#[test]
+fn codepoint_scan_does_not_follow_a_symlink_to_a_directory() {
+    let base = temp_dir("linked-dir");
+    let outside = base.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("note.md"), "a\u{2014}b").unwrap();
+    let root = base.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("clean.md"), "clean").unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("linked")).unwrap();
+    let result = scan_tree(&root);
+    assert_eq!(result.status, 0, "{}", result.stderr);
+    assert!(result.stdout.contains("em dash U+2014 count 0"));
+    assert!(result.stdout.contains("en dash U+2013 count 0"));
+}
+
+/// WS-A73: a symlink to a regular file is scanned through,
+/// the module doc's link clause standing on this pin alone.
+/// The link inside the root names a dash file outside it; a
+/// collect rule that dropped the symlink arm would skip the
+/// link silently and report zero counts at exit 0, so a
+/// dash standing behind a link would pass the gate unseen.
+#[cfg(unix)]
+#[test]
+fn codepoint_scan_scans_through_a_symlink_to_a_file() {
+    let base = temp_dir("linked-file");
+    let target = base.join("outside.md");
+    std::fs::write(&target, "a\u{2014}b").unwrap();
+    let root = base.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    std::os::unix::fs::symlink(&target, root.join("linked.md")).unwrap();
+    let result = scan_tree(&root);
+    assert_eq!(result.status, 1);
+    assert!(result.stdout.contains("em dash U+2014 count 1"));
+    assert!(result.stdout.contains("linked.md"));
+}
