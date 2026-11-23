@@ -10,75 +10,28 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
-use sha2::{Digest, Sha256};
 use wayside::{
     checkpoint, checkpoint_with_databases, fork, list_checkpoints, render_manifest, restore,
-    rewind, show, verify_checkpoint, Error,
+    rewind, show, verify_checkpoint,
+};
+mod common;
+
+use common::{
+    checkpoint_dir, copy_tree, damage_manifest_json, declare, expect_error, make_state,
+    manifest_path, run_cli, sha256_hex,
 };
 
-const MEMORY: &[u8] = b"memory one\n";
-
-static COUNTER: AtomicUsize = AtomicUsize::new(0);
-
 fn temp_dir(tag: &str) -> PathBuf {
-    let count = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!(
-        "wayside-dir-test-{}-{tag}-{count}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+    common::temp_dir("wayside-dir-test", tag)
 }
 
-fn sha256_hex(data: &[u8]) -> String {
-    Sha256::digest(data)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
-fn make_state(base: &Path, files: &[(&str, &[u8])]) -> PathBuf {
-    let state = base.to_path_buf();
-    std::fs::create_dir_all(&state).unwrap();
-    for (rel, data) in files {
-        let path = state.join(rel);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, data).unwrap();
-    }
-    state
-}
+const MEMORY: &[u8] = b"memory one\n";
 
 fn make_dirs(state: &Path, dirs: &[&str]) {
     for rel in dirs {
         std::fs::create_dir_all(state.join(rel)).unwrap();
     }
-}
-
-fn checkpoint_dir(store: &Path, session: &str, sequence: i64) -> PathBuf {
-    store
-        .join("sessions")
-        .join(session)
-        .join("checkpoints")
-        .join(format!("{sequence:06}"))
-}
-
-fn manifest_path(store: &Path, session: &str, sequence: i64) -> PathBuf {
-    checkpoint_dir(store, session, sequence).join("manifest.json")
-}
-
-fn expect_error<T>(result: wayside::Result<T>) -> Error {
-    match result {
-        Ok(_) => panic!("the operation succeeded where the pin requires a refusal"),
-        Err(error) => error,
-    }
-}
-
-fn declare(paths: &[&str]) -> Vec<String> {
-    paths.iter().map(|path| path.to_string()).collect()
 }
 
 /// A plain checkpoint with no env pairs and the standing
@@ -143,39 +96,6 @@ fn tree_files(root: &Path) -> BTreeMap<String, Vec<u8>> {
         }
     }
     files
-}
-
-fn damage_manifest_json(
-    store: &Path,
-    session: &str,
-    sequence: i64,
-    damage: &dyn Fn(&mut serde_json::Value),
-) {
-    let path = manifest_path(store, session, sequence);
-    let mut value: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    damage(&mut value);
-    std::fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
-}
-
-struct CliOutput {
-    status: i32,
-    stdout: String,
-    stderr: String,
-}
-
-fn run_cli(store: &Path, args: &[&str]) -> CliOutput {
-    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
-        .arg("--store")
-        .arg(store)
-        .args(args)
-        .output()
-        .unwrap();
-    CliOutput {
-        status: output.status.code().unwrap_or(-1),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-    }
 }
 
 // WS-20 and WS-22, the record and its restore.
@@ -605,6 +525,53 @@ fn directory_above_a_recorded_file_is_refused() {
     expect_corrupt(&store);
 }
 
+/// WS-A36: a recorded directory standing above a database
+/// member is refused at read. The pin guards the member side
+/// of the directory judgements the first candidate repair
+/// must not move: it passes on the scanning form the repair
+/// replaces and on the repaired form, and fails on a repair
+/// that drops or weakens the member prefix judgement.
+#[test]
+fn directory_above_a_database_member_is_refused() {
+    let base = temp_dir("damage-above-member");
+    let store = base.join("store");
+    let state = make_state(
+        &base.join("state"),
+        &[
+            ("plan.txt", b"first plan\n"),
+            ("data/app.db", b"synthetic database main bytes"),
+        ],
+    );
+    make_dirs(&state, &["spool"]);
+    db_checkpoint(&store, "alpha", &state, &["data/app.db"]).unwrap();
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["directories"] = serde_json::json!(["data"]);
+    });
+    expect_corrupt(&store);
+}
+
+/// WS-A36: a recorded directory path that is also a database
+/// member path is refused at read, the member equality half
+/// of the same judgements, guarded the same way.
+#[test]
+fn directory_equal_to_a_database_member_is_refused() {
+    let base = temp_dir("damage-member-equal");
+    let store = base.join("store");
+    let state = make_state(
+        &base.join("state"),
+        &[
+            ("plan.txt", b"first plan\n"),
+            ("data/app.db", b"synthetic database main bytes"),
+        ],
+    );
+    make_dirs(&state, &["spool"]);
+    db_checkpoint(&store, "alpha", &state, &["data/app.db"]).unwrap();
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["directories"] = serde_json::json!(["data/app.db"]);
+    });
+    expect_corrupt(&store);
+}
+
 #[test]
 fn directory_path_failing_the_recorded_path_rules_is_refused() {
     let (_base, store) = directories_store("damage-unsafe");
@@ -744,19 +711,6 @@ fn cli_checkpoint_restore_round_trip_with_directories() {
 
 // The frozen directories store.
 
-fn copy_tree(from: &Path, to: &Path) {
-    std::fs::create_dir_all(to).unwrap();
-    for entry in std::fs::read_dir(from).unwrap() {
-        let path = entry.unwrap().path();
-        let dest = to.join(path.file_name().unwrap());
-        if path.is_dir() {
-            copy_tree(&path, &dest);
-        } else {
-            std::fs::copy(&path, &dest).unwrap();
-        }
-    }
-}
-
 #[test]
 fn fixture_directories() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -832,4 +786,99 @@ fn fixture_directories() {
     assert_eq!(fourth.sequence, 4);
     assert_eq!(fourth.directories, vec!["fresh".to_string()]);
     assert_eq!(list_checkpoints(&grown, "alpha").unwrap().len(), 4);
+}
+
+// WS-A65, the stands below judgements at depth.
+
+/// WS-A65: a recorded directory standing two components
+/// below a recorded file is refused at read. The pin
+/// passes on the scanning form the repair replaces and on
+/// the repaired form, and it fails on the repair's
+/// plausible wrong form, the form that tests only a
+/// directory's immediate parent against the recorded sets,
+/// which finds plan.txt/sub standing in no recorded set
+/// and accepts what the contract refuses.
+#[test]
+fn directory_below_a_recorded_file_at_depth_two_is_refused() {
+    let (_base, store) = directories_store("damage-below-file-deep");
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["directories"] = serde_json::json!(["plan.txt/sub/deep"]);
+    });
+    expect_corrupt(&store);
+}
+
+/// WS-A65: a recorded directory standing two components
+/// below a database member is refused at read, the member
+/// side of the same judgement, guarded the same way. It
+/// passes on the scanning form and on the repaired form,
+/// and it fails on the form that tests only the immediate
+/// parent, which finds data/app.db/sub standing in no
+/// recorded set and accepts.
+#[test]
+fn directory_below_a_database_member_at_depth_two_is_refused() {
+    let base = temp_dir("damage-below-member-deep");
+    let store = base.join("store");
+    let state = make_state(
+        &base.join("state"),
+        &[
+            ("plan.txt", b"first plan\n"),
+            ("data/app.db", b"synthetic database main bytes"),
+        ],
+    );
+    make_dirs(&state, &["spool"]);
+    db_checkpoint(&store, "alpha", &state, &["data/app.db"]).unwrap();
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["directories"] = serde_json::json!(["data/app.db/sub/deep"]);
+    });
+    expect_corrupt(&store);
+}
+
+/// WS-A65: a recorded directory whose first component
+/// shares a name prefix with a recorded file, plan.txt.bak
+/// beside the recorded plan.txt, loads with the directory
+/// standing, the slash boundary being the whole judgement.
+/// The pin passes on the scanning form and on the repaired
+/// form, and it fails on the boundary less wrong form, a
+/// starts_with test without the slash, which refuses the
+/// directory against plan.txt.
+#[test]
+fn directory_sharing_a_name_prefix_with_a_recorded_file_is_accepted() {
+    let (_base, store) = directories_store("prefix-name");
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["directories"] = serde_json::json!(["plan.txt.bak/sub"]);
+    });
+    let shown = show(&store, "alpha", 1).unwrap();
+    assert_eq!(shown.directories, vec!["plan.txt.bak/sub".to_string()]);
+}
+
+/// WS-A65: a recorded directory standing above one
+/// recorded file and below another draws the above
+/// refusal, the judgement order the repair preserves. The
+/// pin passes on the scanning form and on the repaired
+/// form, and it fails on the arm reordered wrong form, the
+/// below judgements moved ahead of the above ones, which
+/// draws the below refusal instead. The files list is
+/// damaged beside the directories list because no state
+/// tree holds both a and a/b/c as files.
+#[test]
+fn directory_above_and_below_recorded_files_draws_the_above_refusal() {
+    let (_base, store) = directories_store("damage-above-and-below");
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        let entry = value["files"][0].clone();
+        let mut first = entry.clone();
+        first["path"] = serde_json::json!("a");
+        let mut second = entry;
+        second["path"] = serde_json::json!("a/b/c");
+        value["files"] = serde_json::json!([first, second]);
+        value["directories"] = serde_json::json!(["a/b"]);
+    });
+    let error = expect_error(show(&store, "alpha", 1));
+    assert_eq!(error.exit_code(), 2, "{}", error.message());
+    assert!(
+        error
+            .message()
+            .contains("the directory a/b stands above a recorded file"),
+        "{}",
+        error.message()
+    );
 }

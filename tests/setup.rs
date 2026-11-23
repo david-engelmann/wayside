@@ -14,6 +14,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use sha2::{Digest, Sha256};
+mod common;
+
+fn temp_dir(tag: &str) -> PathBuf {
+    common::temp_dir("wayside-setup-test", tag)
+}
 
 const MARKER: &str = "<!-- repo annex below this line -->";
 const GATE_COMMAND: &str = "cargo test";
@@ -27,13 +32,6 @@ fn root() -> PathBuf {
 
 fn read(name: &str) -> String {
     std::fs::read_to_string(root().join(name)).unwrap()
-}
-
-fn temp_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("wayside-setup-test-{}-{tag}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
 }
 
 #[test]
@@ -197,19 +195,29 @@ fn ci_carries_the_fleet_credential_hygiene() {
     assert!(text.contains("contents: read"));
     assert!(text.contains("persist-credentials: false"));
     assert!(!text.contains("rust-toolchain@master"));
-    let toolchain_line = text
+    // Every toolchain step stands judged, not only the first
+    // one the file finds: the workflow carries two, one per
+    // job, and a shortened pin on either fails this pin
+    // (WS-A12).
+    let toolchain_lines: Vec<&str> = text
         .lines()
-        .find(|line| line.contains("dtolnay/rust-toolchain@"))
-        .expect("the workflow carries no toolchain step");
-    let pin = toolchain_line
-        .split("dtolnay/rust-toolchain@")
-        .nth(1)
-        .unwrap()
-        .trim();
-    assert_eq!(pin.len(), 40, "{}", toolchain_line);
-    assert!(pin
-        .bytes()
-        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+        .filter(|line| line.contains("dtolnay/rust-toolchain@"))
+        .collect();
+    assert!(
+        !toolchain_lines.is_empty(),
+        "the workflow carries no toolchain step"
+    );
+    for toolchain_line in toolchain_lines {
+        let pin = toolchain_line
+            .split("dtolnay/rust-toolchain@")
+            .nth(1)
+            .unwrap()
+            .trim();
+        assert_eq!(pin.len(), 40, "{}", toolchain_line);
+        assert!(pin
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+    }
 }
 
 #[test]
@@ -506,4 +514,17 @@ fn codepoint_scan_with_both_streams_unwritable_keeps_exit_2() {
         .status()
         .unwrap();
     assert_eq!(status.code().unwrap_or(-1), 2);
+}
+
+// The port's deliberate divergence: a scan root that does not
+// stand is a scan error at exit 2, where the setup scanner this
+// binary ports exited 0 with zero counts. The root here is
+// never created, so the refusal names the root itself.
+#[test]
+fn codepoint_scan_refuses_a_root_that_does_not_stand() {
+    let root = temp_dir("scan-missing-root").join("no-such-tree");
+    let result = scan_tree(&root);
+    assert_eq!(result.status, 2);
+    assert!(result.stderr.contains("scan error"), "{}", result.stderr);
+    assert!(result.stderr.contains("no-such-tree"), "{}", result.stderr);
 }
