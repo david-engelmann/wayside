@@ -91,7 +91,7 @@ Every command names the store first, with --store. Run the examples below in a s
 
 ### Record a checkpoint with a database bundle
 
-A database bundle is declared by the path of its main file inside the state directory. The bundle is that file together with the file named by appending -wal and the file named by appending -journal, when each stands. The file named by appending -shm is never part of a bundle and is never recorded. Capture reads and hashes every member, copies the members, and then reads and hashes every member again, and a bundle whose second reading differs from its first refuses the checkpoint and consumes no sequence. The capture takes no lock on the database files and freezes nothing, and a change a writer makes and undoes between the two readings is not detected.
+A database bundle is declared by the path of its main file inside the state directory. The bundle is that file together with the file named by appending -wal and the file named by appending -journal, when each stands. The file named by appending -shm to the declared path is never part of a bundle and is never recorded. Capture reads and hashes every member, copies the members, and then reads and hashes every member again, and a bundle whose second reading differs from its first refuses the checkpoint and consumes no sequence. The capture takes no lock on the database files and freezes nothing, and a change a writer makes and undoes between the two readings is not detected.
 
 The state directory below carries a plan, a notes file, and a database with its -wal and -shm companions standing.
 

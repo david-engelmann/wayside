@@ -193,6 +193,19 @@ fn parse_sub(
             };
             match resolve_long(name, &candidates) {
                 Ok(Some("--help")) => {
+                    // A help flag carrying an inline value is
+                    // refused, as the reference parser refuses
+                    // it: the flag takes no argument (WS-A63).
+                    if let Some(value) = &inline_value {
+                        return Err(parser_error(
+                            sub_usage(command),
+                            &format!("wayside {command}"),
+                            format!(
+                                "argument -h/--help: ignored explicit argument {}",
+                                wayside::py_repr(value)
+                            ),
+                        ));
+                    }
                     exit_after_print(&format!("{}\n", sub_help(command)));
                 }
                 Ok(Some(option)) => {
@@ -463,6 +476,19 @@ fn dispatch(argv: &[String]) -> Result<ExitCode, Error> {
             };
             match resolve_long(name, &["--store", "--help"]) {
                 Ok(Some("--help")) => {
+                    // A help flag carrying an inline value is
+                    // refused, as the reference parser refuses
+                    // it: the flag takes no argument (WS-A63).
+                    if let Some(value) = &inline_value {
+                        return Ok(parser_fail(
+                            MAIN_USAGE,
+                            "wayside",
+                            &format!(
+                                "argument -h/--help: ignored explicit argument {}",
+                                wayside::py_repr(value)
+                            ),
+                        ));
+                    }
                     print_output(&format!("{MAIN_HELP}\n"))?;
                     return Ok(ExitCode::from(0));
                 }
