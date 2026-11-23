@@ -1,8 +1,14 @@
 //! The behaviour pins, translated pin for pin from the Python
-//! suite that closed Round 1. Each test names the same fact its
-//! Python original named, and the parametrized families expand
-//! to one test per value, named by the value, keeping the item
-//! count at parity: 76 translated tests. Where the Rust harness
+//! suite that closed Round 1. Each translated test names the
+//! same fact its Python original named, and the parametrized
+//! families expand to one test per value, named by the value.
+//! The translation stood at parity with the Python suite when
+//! the port landed, at 76 translated tests. Pins added since
+//! the port, by the port's own repair pass and by the audit
+//! programme, stand beside the translated family and carry
+//! their finding numbers where they land, so the file's test
+//! count is no longer the translated count. Where the Rust
+//! harness
 //! cannot carry a Python mechanism, the pin keeps its substance
 //! and changes its injection, and each such change is stated
 //! where it lands. The monkeypatched directory listing of the
@@ -21,137 +27,31 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use sha2::{Digest, Sha256};
 use wayside::{
     checkpoint, checkpoint_with_reader, fork, list_checkpoints, restore, rewind, show, Error,
     StateTreeReader,
 };
+mod common;
 
-const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-
-static COUNTER: AtomicUsize = AtomicUsize::new(0);
-static ENV_LOCK: Mutex<()> = Mutex::new(());
+use common::{
+    checkpoint_dir, copy_tree, damage_manifest_json, damage_manifest_text, expect_error, hash_tree,
+    make_state, manifest_path, run_cli, sha256_hex, tree_bytes, CliOutput, EMPTY_SHA256,
+};
 
 fn temp_dir(tag: &str) -> PathBuf {
-    let count = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let dir =
-        std::env::temp_dir().join(format!("wayside-test-{}-{tag}-{count}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+    common::temp_dir("wayside-test", tag)
 }
 
-fn sha256_hex(data: &[u8]) -> String {
-    Sha256::digest(data)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
-fn make_state(base: &Path, files: &[(&str, &[u8])]) -> PathBuf {
-    let state = base.to_path_buf();
-    std::fs::create_dir_all(&state).unwrap();
-    for (rel, data) in files {
-        let path = state.join(rel);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, data).unwrap();
-    }
-    state
-}
-
-fn checkpoint_dir(store: &Path, session: &str, sequence: i64) -> PathBuf {
-    store
-        .join("sessions")
-        .join(session)
-        .join("checkpoints")
-        .join(format!("{sequence:06}"))
-}
-
-fn manifest_path(store: &Path, session: &str, sequence: i64) -> PathBuf {
-    checkpoint_dir(store, session, sequence).join("manifest.json")
-}
-
-fn hash_tree(root: &Path) -> BTreeMap<String, String> {
-    let mut result = BTreeMap::new();
-    hash_tree_into(root, root, &mut result);
-    result
-}
-
-fn hash_tree_into(root: &Path, dir: &Path, result: &mut BTreeMap<String, String>) {
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
-        .unwrap()
-        .flatten()
-        .map(|entry| entry.path())
-        .collect();
-    entries.sort();
-    for path in entries {
-        if path.is_dir() {
-            hash_tree_into(root, &path, result);
-        } else if path.is_file() {
-            let rel = path
-                .strip_prefix(root)
-                .unwrap()
-                .to_string_lossy()
-                .replace('\\', "/");
-            result.insert(rel, sha256_hex(&std::fs::read(&path).unwrap()));
-        }
-    }
-}
-
-fn copy_tree(from: &Path, to: &Path) {
-    std::fs::create_dir_all(to).unwrap();
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(from)
-        .unwrap()
-        .flatten()
-        .map(|entry| entry.path())
-        .collect();
-    entries.sort();
-    for path in entries {
-        let dest = to.join(path.file_name().unwrap());
-        if path.is_dir() {
-            copy_tree(&path, &dest);
-        } else {
-            std::fs::copy(&path, &dest).unwrap();
-        }
-    }
-}
+static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn env_of(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
     pairs
         .iter()
         .map(|(key, value)| (key.to_string(), value.to_string()))
         .collect()
-}
-
-fn expect_error<T>(result: wayside::Result<T>) -> Error {
-    match result {
-        Ok(_) => panic!("the operation succeeded where the pin requires a refusal"),
-        Err(error) => error,
-    }
-}
-
-struct CliOutput {
-    status: i32,
-    stdout: String,
-    stderr: String,
-}
-
-fn run_cli(store: &Path, args: &[&str]) -> CliOutput {
-    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
-        .arg("--store")
-        .arg(store)
-        .args(args)
-        .output()
-        .unwrap();
-    CliOutput {
-        status: output.status.code().unwrap_or(-1),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-    }
 }
 
 /// Drive the CLI with a deadline, for the pin whose Python
@@ -195,19 +95,6 @@ fn run_cli_timed(store: &Path, args: &[&str], timeout: Duration) -> CliOutput {
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-}
-
-fn damage_manifest_json(
-    store: &Path,
-    session: &str,
-    sequence: i64,
-    damage: &dyn Fn(&mut serde_json::Value),
-) {
-    let path = manifest_path(store, session, sequence);
-    let mut value: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    damage(&mut value);
-    std::fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
 }
 
 #[test]
@@ -581,6 +468,60 @@ fn flipped_memory_byte_fails_restore_and_places_nothing() {
     assert!(!target.exists());
 }
 
+// WS-A55: the payload reading family's presence arms. A recorded
+// payload removed from a written checkpoint draws the missing
+// tail of the corrupt checkpoint refusal, through restore and
+// through verify alike, and nothing is placed. The family's
+// mismatch arms stand pinned by the flipped byte pins above.
+
+#[test]
+fn missing_payload_fails_restore_and_verify_and_places_nothing() {
+    let base = temp_dir("missing-payload");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"original bytes")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    std::fs::remove_file(
+        checkpoint_dir(&store, "alpha", 1)
+            .join("files")
+            .join("a.txt"),
+    )
+    .unwrap();
+    let target = base.join("target");
+    let error = expect_error(restore(&store, "alpha", 1, &target));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error.message().contains("the payload for a.txt is missing"),
+        "{}",
+        error.message()
+    );
+    assert!(!target.exists());
+    let error = expect_error(wayside::verify_checkpoint(&store, "alpha", 1));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error.message().contains("the payload for a.txt is missing"),
+        "{}",
+        error.message()
+    );
+}
+
+#[test]
+fn missing_memory_document_fails_restore_and_places_nothing() {
+    let base = temp_dir("missing-memory");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"memory bytes").unwrap();
+    std::fs::remove_file(checkpoint_dir(&store, "alpha", 1).join("memory.bin")).unwrap();
+    let target = base.join("target");
+    let error = expect_error(restore(&store, "alpha", 1, &target));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error.message().contains("the memory document is missing"),
+        "{}",
+        error.message()
+    );
+    assert!(!target.exists());
+}
+
 #[test]
 fn a_checkpoint_never_changes_once_written() {
     let base = temp_dir("immutable");
@@ -653,17 +594,6 @@ fn directory_at_memory_path_fails_restore_and_places_nothing() {
         error.message()
     );
     assert!(!target.exists());
-}
-
-fn damage_manifest_text(
-    store: &Path,
-    session: &str,
-    sequence: i64,
-    damage: &dyn Fn(&str) -> String,
-) {
-    let path = manifest_path(store, session, sequence);
-    let text = std::fs::read_to_string(&path).unwrap();
-    std::fs::write(&path, damage(&text)).unwrap();
 }
 
 #[test]
@@ -1930,6 +1860,96 @@ fn cli_sequence_errors_share_the_invalid_name_exit_code() {
     assert!(!target.exists());
 }
 
+// WS-A8, the accepted shapes: the sequence argument's parser
+// takes the shapes Python's int conversion takes, an optional
+// sign, a leading zero, single underscores between digits,
+// and padding by the six ASCII whitespace characters, and
+// those shapes stand pinned here beside the refusal pins.
+// On a parser simplified to a plain integer parse, every
+// spelling below is refused and this pin fails.
+
+#[test]
+fn cli_sequence_accepts_the_python_int_ascii_shapes() {
+    let base = temp_dir("cli-sequence-shapes");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    let result = run_cli(
+        &store,
+        &["checkpoint", "alpha", "--state", state.to_str().unwrap()],
+    );
+    assert_eq!(result.status, 0, "{}", result.stderr);
+    for spelling in ["+1", "01", " 1", "1 ", "\t1", "1\n", "\r1", "\u{b}1\u{c}"] {
+        let shown = run_cli(&store, &["show", "alpha", spelling]);
+        assert_eq!(shown.status, 0, "{spelling:?}: {}", shown.stderr);
+        let value: serde_json::Value = serde_json::from_str(&shown.stdout).unwrap();
+        assert_eq!(value["sequence"].as_i64(), Some(1), "{spelling:?}");
+    }
+    // The underscore shape names the value it spells: 1_0 is
+    // checkpoint 10, which the session does not hold, so the
+    // refusal that answers is the not found refusal for 10,
+    // not the parser's invalid sequence refusal.
+    let shown = run_cli(&store, &["show", "alpha", "1_0"]);
+    assert_eq!(shown.status, 2);
+    assert!(
+        shown
+            .stderr
+            .contains("holds no checkpoint 10 in the store at "),
+        "{}",
+        shown.stderr
+    );
+    assert!(
+        !shown.stderr.contains("invalid sequence"),
+        "{}",
+        shown.stderr
+    );
+}
+
+// WS-A8, the near misses: the shapes the parser refuses at
+// its own site, each drawing the quoted invalid sequence
+// message the parse refusal carries, where a value the
+// parser accepts and the library's judgement refuses draws
+// the unquoted one. On a parser whose underscore arm is
+// loosened, the underscore shapes below are accepted and
+// this pin fails.
+
+#[test]
+fn cli_sequence_refuses_the_python_int_near_misses() {
+    let base = temp_dir("cli-sequence-misses");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    let result = run_cli(
+        &store,
+        &["checkpoint", "alpha", "--state", state.to_str().unwrap()],
+    );
+    assert_eq!(result.status, 0, "{}", result.stderr);
+    for spelling in ["1__0", "_1", "1_", "+_1", "1 0", ""] {
+        let shown = run_cli(&store, &["show", "alpha", spelling]);
+        assert_eq!(shown.status, 2, "{spelling:?}");
+        let message = format!("invalid sequence '{spelling}', use a positive integer");
+        assert!(
+            shown.stderr.contains(&message),
+            "{spelling:?}: {}",
+            shown.stderr
+        );
+    }
+    // A negative value parses and is refused by the value
+    // judgement instead, with the unquoted message.
+    let shown = run_cli(&store, &["show", "alpha", "-1"]);
+    assert_eq!(shown.status, 2);
+    assert!(
+        shown
+            .stderr
+            .contains("invalid sequence -1, use a positive integer"),
+        "{}",
+        shown.stderr
+    );
+    assert!(
+        !shown.stderr.contains("invalid sequence '"),
+        "{}",
+        shown.stderr
+    );
+}
+
 // WS-A45: the parser's equals form. An option's value may ride
 // on the option token itself, split at the first equals sign,
 // and --env keeps everything after its own first equals sign as
@@ -2162,6 +2182,55 @@ fn cli_double_dash_ends_option_parsing() {
     );
 }
 
+// WS-A49: the double dash is the separator at the top level
+// too. Standing before the subcommand, it ends top level
+// option parsing, and the next token is the command whatever
+// it looks like, as argparse gives it. On the code this pin
+// was written against, the separator landed in the extras and
+// the invocation was refused as unrecognized arguments.
+#[test]
+fn cli_double_dash_before_the_command_still_runs_it() {
+    let base = temp_dir("cli-top-separator");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
+        .arg("--store")
+        .arg(&store)
+        .arg("--")
+        .arg("list")
+        .arg("alpha")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert_eq!(output.status.code().unwrap_or(-1), 0, "{stdout}");
+    assert!(stdout.starts_with("1 "), "{stdout}");
+}
+
+// WS-A49: an option like token after the top level separator
+// is taken as the command and refused as an invalid choice,
+// the refusal argparse gives. On the code this pin was written
+// against, the token landed in the extras, no command was ever
+// taken, and the report named the required arguments instead.
+#[test]
+fn cli_token_after_the_top_level_separator_is_the_command() {
+    let base = temp_dir("cli-top-separator-choice");
+    let store = base.join("store");
+    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
+        .arg("--store")
+        .arg(&store)
+        .arg("--")
+        .arg("--bogus")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(output.status.code().unwrap_or(-1), 2, "{stderr}");
+    assert!(
+        stderr.contains("argument command: invalid choice: '--bogus'"),
+        "{stderr}"
+    );
+}
+
 // WS-A45 with WS-A26: the help texts print through the same
 // checked writer as command output, so a help print pointed at
 // an unwritable output draws the same output refusal at exit 1
@@ -2356,6 +2425,63 @@ fn checkpoint_fails_when_the_state_directory_cannot_be_listed() {
     assert!(!checkpoint_dir(&store, "alpha", 1).exists());
 }
 
+/// WS-A27: a state tree holding a name that is not valid
+/// UTF-8 is refused at the walk. On the code this pin was
+/// written against, the name was recorded under its lossy
+/// rendering and restored under that rendering, silently.
+#[cfg(unix)]
+#[test]
+fn checkpoint_refuses_a_state_file_whose_name_is_not_valid_utf8() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let base = temp_dir("walk-non-utf8-file");
+    let store = base.join("store");
+    let state = base.join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(state.join("plain.txt"), b"plain").unwrap();
+    let bad = std::ffi::OsString::from_vec(b"bad-\xff.txt".to_vec());
+    std::fs::write(state.join(bad), b"bad bytes").unwrap();
+    let error = expect_error(checkpoint(&store, "alpha", &state, None, b""));
+    assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert!(
+        error.message().contains("not valid UTF-8"),
+        "{}",
+        error.message()
+    );
+    assert!(!checkpoint_dir(&store, "alpha", 1).exists());
+    // The refusal consumed no sequence: the next clean
+    // checkpoint of the session takes sequence 1.
+    let clean = make_state(&base.join("clean"), &[("a.txt", b"a")]);
+    let manifest = checkpoint(&store, "alpha", &clean, None, b"").unwrap();
+    assert_eq!(manifest.sequence, 1);
+}
+
+/// WS-A27: the directory shape of the same refusal. On the
+/// code this pin was written against, the directory's name
+/// was recorded under its lossy rendering and its payload
+/// restored under that rendering.
+#[cfg(unix)]
+#[test]
+fn checkpoint_refuses_a_state_directory_whose_name_is_not_valid_utf8() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let base = temp_dir("walk-non-utf8-dir");
+    let store = base.join("store");
+    let state = base.join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    let dir = state.join(std::ffi::OsString::from_vec(b"bad-\xfe".to_vec()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("inner.txt"), b"inner").unwrap();
+    let error = expect_error(checkpoint(&store, "alpha", &state, None, b""));
+    assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert!(
+        error.message().contains("not valid UTF-8"),
+        "{}",
+        error.message()
+    );
+    assert!(!checkpoint_dir(&store, "alpha", 1).exists());
+}
+
 #[test]
 fn cli_memory_symlink_is_refused_with_its_own_message() {
     let base = temp_dir("cli-memory-link");
@@ -2403,33 +2529,6 @@ fn fixture_root(name: &str) -> PathBuf {
         .join("tests")
         .join("fixtures")
         .join(name)
-}
-
-fn tree_bytes(root: &Path) -> BTreeMap<String, Vec<u8>> {
-    let mut result = BTreeMap::new();
-    tree_bytes_into(root, root, &mut result);
-    result
-}
-
-fn tree_bytes_into(root: &Path, dir: &Path, result: &mut BTreeMap<String, Vec<u8>>) {
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
-        .unwrap()
-        .flatten()
-        .map(|entry| entry.path())
-        .collect();
-    entries.sort();
-    for path in entries {
-        if path.is_dir() {
-            tree_bytes_into(root, &path, result);
-        } else {
-            let rel = path
-                .strip_prefix(root)
-                .unwrap()
-                .to_string_lossy()
-                .replace('\\', "/");
-            result.insert(rel, std::fs::read(&path).unwrap());
-        }
-    }
 }
 
 fn fixture_case(name: &str, sessions: &[(&str, &[i64])], grow_session: &str, next_sequence: i64) {
@@ -2801,5 +2900,137 @@ fn session_id_carrying_a_c1_control_is_refused_with_the_escape_in_the_message() 
             .any(|c| ('\u{80}'..='\u{9f}').contains(&c)),
         "{}",
         error.message()
+    );
+}
+
+// WS-A63: the help flag in the equals form. The help flag
+// takes no argument, so a value riding on the token in the
+// equals form is refused at exit 2 with the reference
+// parser's ignored explicit argument message, at the top
+// level and in a subcommand alike, through the exact name
+// and through an unambiguous prefix. On the code this pin
+// was written against, both levels discarded the value and
+// printed the help text at exit 0. A repair refusing the
+// shape at only one level fails the other pin, and a repair
+// refusing every equals form fails WS-A45's equals pins.
+
+#[test]
+fn cli_help_flag_with_an_equals_value_is_refused_at_the_top_level() {
+    let base = temp_dir("cli-help-equals-top");
+    let store = base.join("store");
+    // Without the store option: help is a parser matter and
+    // runs before the store is required, so the refusal
+    // answers here too.
+    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
+        .arg("--help=x")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(output.status.code().unwrap_or(-1), 2, "{stderr}");
+    assert!(stderr.starts_with("usage: wayside"), "{stderr}");
+    assert!(
+        stderr.contains("argument -h/--help: ignored explicit argument 'x'"),
+        "{stderr}"
+    );
+    // With the store option standing, the exact name and an
+    // unambiguous prefix refuse the same way, and an empty
+    // value names the empty string.
+    for (token, rendered) in [("--help=x", "'x'"), ("--hel=x", "'x'"), ("--help=", "''")] {
+        let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
+            .arg("--store")
+            .arg(&store)
+            .arg(token)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert_eq!(output.status.code().unwrap_or(-1), 2, "{token}: {stderr}");
+        assert!(stderr.starts_with("usage: wayside"), "{token}: {stderr}");
+        let message = format!("argument -h/--help: ignored explicit argument {rendered}");
+        assert!(stderr.contains(&message), "{token}: {stderr}");
+        assert!(output.stdout.is_empty(), "{token}: help printed");
+    }
+    assert!(!store.exists());
+}
+
+#[test]
+fn cli_help_flag_with_an_equals_value_is_refused_in_a_subcommand() {
+    let base = temp_dir("cli-help-equals-sub");
+    let store = base.join("store");
+    for (command, usage) in [
+        ("list", "usage: wayside list"),
+        ("checkpoint", "usage: wayside checkpoint"),
+    ] {
+        let result = run_cli(&store, &[command, "--help=x"]);
+        assert_eq!(result.status, 2, "{command}: {}", result.stderr);
+        assert!(
+            result.stderr.contains(usage),
+            "{command}: {}",
+            result.stderr
+        );
+        assert!(
+            result
+                .stderr
+                .contains("argument -h/--help: ignored explicit argument 'x'"),
+            "{command}: {}",
+            result.stderr
+        );
+        assert!(result.stdout.is_empty(), "{command}: help printed");
+    }
+    assert!(!store.exists());
+}
+
+// WS-A66: the forked_from session judgement stated once. A
+// recorded fork session draws the one corrupt refusal naming
+// it not a safe session id in two shapes, a value that is not
+// text and a text that fails the session id rule, and the two
+// pins below stage one shape each by editing a forked
+// checkpoint's manifest in place. Each pin answers a plausible
+// wrong form of a repair at this seat. A validator that checks
+// only that the value is text loads the first manifest, and a
+// validator that applies the session rule to text alone and
+// passes any other value through loads the second. Both pins
+// pass on the standing code, whose two step form refuses each
+// shape with the same refusal.
+#[test]
+fn a_forked_manifest_naming_an_unsafe_fork_session_is_refused() {
+    let base = temp_dir("fork-session-unsafe");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    fork(&store, "alpha", 1, "beta").unwrap();
+    let manifest_path = checkpoint_dir(&store, "beta", 1).join("manifest.json");
+    let text = std::fs::read_to_string(&manifest_path).unwrap();
+    let edited = text.replace("\"session\": \"alpha\"", "\"session\": \"Bad Name\"");
+    assert_ne!(edited, text);
+    std::fs::write(&manifest_path, edited).unwrap();
+    let error = expect_error(show(&store, "beta", 1));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("the forked_from session is not a safe session id"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_forked_manifest_naming_a_non_text_fork_session_is_refused() {
+    let base = temp_dir("fork-session-non-text");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    fork(&store, "alpha", 1, "beta").unwrap();
+    let manifest_path = checkpoint_dir(&store, "beta", 1).join("manifest.json");
+    let text = std::fs::read_to_string(&manifest_path).unwrap();
+    let edited = text.replace("\"session\": \"alpha\"", "\"session\": 7");
+    assert_ne!(edited, text);
+    std::fs::write(&manifest_path, edited).unwrap();
+    let error = expect_error(show(&store, "beta", 1));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("the forked_from session is not a safe session id"),
+        "{error:?}"
     );
 }
