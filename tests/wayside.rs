@@ -2128,6 +2128,55 @@ fn cli_double_dash_ends_option_parsing() {
     );
 }
 
+// WS-A49: the double dash is the separator at the top level
+// too. Standing before the subcommand, it ends top level
+// option parsing, and the next token is the command whatever
+// it looks like, as argparse gives it. On the code this pin
+// was written against, the separator landed in the extras and
+// the invocation was refused as unrecognized arguments.
+#[test]
+fn cli_double_dash_before_the_command_still_runs_it() {
+    let base = temp_dir("cli-top-separator");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
+        .arg("--store")
+        .arg(&store)
+        .arg("--")
+        .arg("list")
+        .arg("alpha")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert_eq!(output.status.code().unwrap_or(-1), 0, "{stdout}");
+    assert!(stdout.starts_with("1 "), "{stdout}");
+}
+
+// WS-A49: an option like token after the top level separator
+// is taken as the command and refused as an invalid choice,
+// the refusal argparse gives. On the code this pin was written
+// against, the token landed in the extras, no command was ever
+// taken, and the report named the required arguments instead.
+#[test]
+fn cli_token_after_the_top_level_separator_is_the_command() {
+    let base = temp_dir("cli-top-separator-choice");
+    let store = base.join("store");
+    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
+        .arg("--store")
+        .arg(&store)
+        .arg("--")
+        .arg("--bogus")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(output.status.code().unwrap_or(-1), 2, "{stderr}");
+    assert!(
+        stderr.contains("argument command: invalid choice: '--bogus'"),
+        "{stderr}"
+    );
+}
+
 // WS-A45 with WS-A26: the help texts print through the same
 // checked writer as command output, so a help print pointed at
 // an unwritable output draws the same output refusal at exit 1
