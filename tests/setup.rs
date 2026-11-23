@@ -451,6 +451,34 @@ fn codepoint_scan_takes_a_root_whose_name_is_not_unicode() {
     assert!(!result.stderr.contains("panicked"), "{}", result.stderr);
 }
 
+/// WS-A53: an argument past the root is a scan error at
+/// exit 2, refused before any scan. On the code this pin
+/// was written against, the scanner took its root from
+/// the first argument and never examined the rest, so a
+/// call naming two roots scanned the first and reported
+/// its counts as if the call had named one root only;
+/// here the first root holds an em dash, so the standing
+/// code exits 1 on the dash it finds.
+#[test]
+fn codepoint_scan_refuses_an_argument_past_the_root() {
+    let dir = temp_dir("extra-argument");
+    std::fs::write(dir.join("note.md"), "a\u{2014}b").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_codepoint_scan"))
+        .arg(&dir)
+        .arg("a-second-root")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code().unwrap_or(-1), 2);
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(stderr.contains("scan error"), "{stderr}");
+    assert!(stderr.contains("one root"), "{stderr}");
+    assert!(
+        output.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
 /// WS-A26: a scan whose output cannot be written is a scan
 /// error at exit 2, never a panic. The pin points the
 /// scanner's standard output at /dev/full, whose every write
