@@ -128,6 +128,29 @@ def test_refusals_raise_with_the_command_line_messages(tmp_path):
         wayside.show(store, "alpha", 1)
 
 
+def test_restore_refuses_a_blocked_target_as_target_error(tmp_path):
+    store = str(tmp_path / "store")
+    state = tmp_path / "state"
+    write_state(state, "first plan")
+    wayside.checkpoint(store, "alpha", str(state))
+
+    occupied = tmp_path / "occupied"
+    occupied.mkdir()
+    (occupied / "plan.txt").write_text("someone else's work")
+    with pytest.raises(wayside.TargetError) as not_empty:
+        wayside.restore(store, "alpha", 1, str(occupied))
+    assert "is not empty" in str(not_empty.value)
+    assert (occupied / "plan.txt").read_text() == "someone else's work"
+    assert not (occupied / "work").exists()
+
+    standing = tmp_path / "standing-file"
+    standing.write_text("a file, not a directory")
+    with pytest.raises(wayside.TargetError) as not_a_directory:
+        wayside.restore(store, "alpha", 1, str(standing))
+    assert "exists and is not a directory" in str(not_a_directory.value)
+    assert standing.read_text() == "a file, not a directory"
+
+
 def test_the_database_lifecycle_through_the_binding(tmp_path):
     import hashlib
 
@@ -255,3 +278,95 @@ def test_the_directories_lifecycle_through_the_binding(tmp_path):
     plain = wayside.checkpoint(store, "alpha", str(plain_state))
     assert plain["format"] == "wayside-checkpoint/1"
     assert plain["directories"] == []
+
+def test_sequence_outside_the_i64_range_is_an_invalid_name(tmp_path):
+    store = str(tmp_path / "store")
+    state = tmp_path / "state"
+    write_state(state, "first plan")
+    wayside.checkpoint(store, "alpha", str(state))
+
+    too_wide = 2**70
+    with pytest.raises(wayside.InvalidNameError) as shown:
+        wayside.show(store, "alpha", too_wide)
+    assert str(shown.value) == (
+        f"invalid sequence {too_wide}, use a positive integer"
+    )
+
+    with pytest.raises(wayside.InvalidNameError) as negative:
+        wayside.show(store, "alpha", -too_wide)
+    assert str(negative.value) == (
+        f"invalid sequence {-too_wide}, use a positive integer"
+    )
+
+    target = tmp_path / "target"
+    with pytest.raises(wayside.InvalidNameError):
+        wayside.restore(store, "alpha", too_wide, str(target))
+    assert not target.exists()
+
+    with pytest.raises(wayside.InvalidNameError):
+        wayside.compare(store, "alpha", 1, too_wide)
+
+
+def test_manifest_dictionaries_stand_in_the_formats_field_order(tmp_path):
+    store = str(tmp_path / "store")
+    state = tmp_path / "state"
+    data = state / "data"
+    data.mkdir(parents=True)
+    (data / "app.db").write_bytes(b"binding database main bytes")
+    (data / "app.db-wal").write_bytes(b"binding wal bytes")
+    (state / "plan.txt").write_text("first plan")
+    (state / "spool").mkdir()
+
+    first = wayside.checkpoint(
+        store, "alpha", str(state), databases=["data/app.db"]
+    )
+    assert first["format"] == "wayside-checkpoint/2"
+    assert list(first.keys()) == [
+        "created_at",
+        "databases",
+        "directories",
+        "env",
+        "files",
+        "forked_from",
+        "format",
+        "memory",
+        "sequence",
+        "session",
+    ]
+    (database,) = first["databases"]
+    assert list(database.keys()) == ["bundle_sha256", "members", "path"]
+
+
+def test_the_forked_manifest_dictionary_stands_in_the_formats_field_order(
+    tmp_path,
+):
+    import json
+
+    # The byte identity below stands on the forked manifest because
+    # it carries every field the dictionary carries. An unforked
+    # manifest's dictionary carries forked_from as None where the
+    # stored rendering omits the field, so its serialization carries
+    # one line the stored text does not.
+
+    store = str(tmp_path / "store")
+    state = tmp_path / "state"
+    data = state / "data"
+    data.mkdir(parents=True)
+    (data / "app.db").write_bytes(b"binding database main bytes")
+    (state / "plan.txt").write_text("first plan")
+    (state / "spool").mkdir()
+    wayside.checkpoint(store, "alpha", str(state), databases=["data/app.db"])
+
+    forked = wayside.fork(store, "alpha", 1, "beta")
+    assert list(forked["forked_from"].keys()) == ["sequence", "session"]
+
+    stored = (
+        tmp_path
+        / "store"
+        / "sessions"
+        / "beta"
+        / "checkpoints"
+        / "000001"
+        / "manifest.json"
+    ).read_text()
+    assert json.dumps(forked, indent=2) + "\n" == stored
