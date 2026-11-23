@@ -3078,3 +3078,92 @@ fn a_forked_manifest_naming_a_non_text_fork_session_is_refused() {
         "{error:?}"
     );
 }
+
+// WS-A70: the forked_from entry's sequence and field set
+// judgements. WS-A66 pinned the entry's session judgement;
+// the pins below stage the entry's other two judgements by
+// editing a forked checkpoint's manifest in place, the
+// sequence set to 0, the sequence set to a string, and an
+// extra key added to the entry, each drawn through show.
+// Each pin answers a plausible wrong form of a repair at
+// this seat: a sequence guard relaxed to admit 0 would name
+// a checkpoint that cannot exist, a sequence arm that
+// passes a wrongly typed value through would leave the
+// entry's sequence unjudged, and a field set arm that
+// admitted an extra key into the entry would break the
+// strictness the whole manifest reader stands on.
+
+#[test]
+fn a_forked_manifest_with_a_zero_fork_sequence_is_refused() {
+    let base = temp_dir("fork-sequence-zero");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    fork(&store, "alpha", 1, "beta").unwrap();
+    let manifest_path = checkpoint_dir(&store, "beta", 1).join("manifest.json");
+    let text = std::fs::read_to_string(&manifest_path).unwrap();
+    let edited = text.replace(
+        "\"sequence\": 1,\n    \"session\": \"alpha\"",
+        "\"sequence\": 0,\n    \"session\": \"alpha\"",
+    );
+    assert_ne!(edited, text);
+    std::fs::write(&manifest_path, edited).unwrap();
+    let error = expect_error(show(&store, "beta", 1));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("the forked_from sequence is not a positive integer"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_forked_manifest_with_a_non_integer_fork_sequence_is_refused() {
+    let base = temp_dir("fork-sequence-text");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    fork(&store, "alpha", 1, "beta").unwrap();
+    let manifest_path = checkpoint_dir(&store, "beta", 1).join("manifest.json");
+    let text = std::fs::read_to_string(&manifest_path).unwrap();
+    let edited = text.replace(
+        "\"sequence\": 1,\n    \"session\": \"alpha\"",
+        "\"sequence\": \"1\",\n    \"session\": \"alpha\"",
+    );
+    assert_ne!(edited, text);
+    std::fs::write(&manifest_path, edited).unwrap();
+    let error = expect_error(show(&store, "beta", 1));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("the forked_from sequence is not a positive integer"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_forked_manifest_with_an_extra_forked_from_key_is_refused() {
+    let base = temp_dir("fork-entry-extra-key");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    fork(&store, "alpha", 1, "beta").unwrap();
+    let manifest_path = checkpoint_dir(&store, "beta", 1).join("manifest.json");
+    let text = std::fs::read_to_string(&manifest_path).unwrap();
+    let edited = text.replace(
+        "\"forked_from\": {\n    \"sequence\": 1,",
+        "\"forked_from\": {\n    \"extra\": 1,\n    \"sequence\": 1,",
+    );
+    assert_ne!(edited, text);
+    std::fs::write(&manifest_path, edited).unwrap();
+    let error = expect_error(show(&store, "beta", 1));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("the forked_from entry does not carry exactly session and sequence"),
+        "{error:?}"
+    );
+}
