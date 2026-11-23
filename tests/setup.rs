@@ -515,3 +515,16 @@ fn codepoint_scan_with_both_streams_unwritable_keeps_exit_2() {
         .unwrap();
     assert_eq!(status.code().unwrap_or(-1), 2);
 }
+
+// The port's deliberate divergence: a scan root that does not
+// stand is a scan error at exit 2, where the setup scanner this
+// binary ports exited 0 with zero counts. The root here is
+// never created, so the refusal names the root itself.
+#[test]
+fn codepoint_scan_refuses_a_root_that_does_not_stand() {
+    let root = temp_dir("scan-missing-root").join("no-such-tree");
+    let result = scan_tree(&root);
+    assert_eq!(result.status, 2);
+    assert!(result.stderr.contains("scan error"), "{}", result.stderr);
+    assert!(result.stderr.contains("no-such-tree"), "{}", result.stderr);
+}
