@@ -10,8 +10,7 @@ and was written for these fixtures.
 How each fixture was made. During the port preparation, outside this
 repository, one produce.py per fixture drove the Python library and a
 build script ran them and then recorded the truths. The production
-scripts are not carried in this repository, which holds no Python
-from this round on. The exact production invocation per fixture was:
+scripts are not carried in this repository. The exact production invocation per fixture was:
 
     PYTHONPATH=<python-checkout> python3 produce.py <store-dir>
 
