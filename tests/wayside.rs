@@ -1,8 +1,14 @@
 //! The behaviour pins, translated pin for pin from the Python
-//! suite that closed Round 1. Each test names the same fact its
-//! Python original named, and the parametrized families expand
-//! to one test per value, named by the value, keeping the item
-//! count at parity: 76 translated tests. Where the Rust harness
+//! suite that closed Round 1. Each translated test names the
+//! same fact its Python original named, and the parametrized
+//! families expand to one test per value, named by the value.
+//! The translation stood at parity with the Python suite when
+//! the port landed, at 76 translated tests. Pins added since
+//! the port, by the port's own repair pass and by the audit
+//! programme, stand beside the translated family and carry
+//! their finding numbers where they land, so the file's test
+//! count is no longer the translated count. Where the Rust
+//! harness
 //! cannot carry a Python mechanism, the pin keeps its substance
 //! and changes its injection, and each such change is stated
 //! where it lands. The monkeypatched directory listing of the
@@ -21,137 +27,31 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use sha2::{Digest, Sha256};
 use wayside::{
     checkpoint, checkpoint_with_reader, fork, list_checkpoints, restore, rewind, show, Error,
     StateTreeReader,
 };
+mod common;
 
-const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-
-static COUNTER: AtomicUsize = AtomicUsize::new(0);
-static ENV_LOCK: Mutex<()> = Mutex::new(());
+use common::{
+    checkpoint_dir, copy_tree, damage_manifest_json, damage_manifest_text, expect_error, hash_tree,
+    make_state, manifest_path, run_cli, sha256_hex, tree_bytes, CliOutput, EMPTY_SHA256,
+};
 
 fn temp_dir(tag: &str) -> PathBuf {
-    let count = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let dir =
-        std::env::temp_dir().join(format!("wayside-test-{}-{tag}-{count}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+    common::temp_dir("wayside-test", tag)
 }
 
-fn sha256_hex(data: &[u8]) -> String {
-    Sha256::digest(data)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
-fn make_state(base: &Path, files: &[(&str, &[u8])]) -> PathBuf {
-    let state = base.to_path_buf();
-    std::fs::create_dir_all(&state).unwrap();
-    for (rel, data) in files {
-        let path = state.join(rel);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, data).unwrap();
-    }
-    state
-}
-
-fn checkpoint_dir(store: &Path, session: &str, sequence: i64) -> PathBuf {
-    store
-        .join("sessions")
-        .join(session)
-        .join("checkpoints")
-        .join(format!("{sequence:06}"))
-}
-
-fn manifest_path(store: &Path, session: &str, sequence: i64) -> PathBuf {
-    checkpoint_dir(store, session, sequence).join("manifest.json")
-}
-
-fn hash_tree(root: &Path) -> BTreeMap<String, String> {
-    let mut result = BTreeMap::new();
-    hash_tree_into(root, root, &mut result);
-    result
-}
-
-fn hash_tree_into(root: &Path, dir: &Path, result: &mut BTreeMap<String, String>) {
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
-        .unwrap()
-        .flatten()
-        .map(|entry| entry.path())
-        .collect();
-    entries.sort();
-    for path in entries {
-        if path.is_dir() {
-            hash_tree_into(root, &path, result);
-        } else if path.is_file() {
-            let rel = path
-                .strip_prefix(root)
-                .unwrap()
-                .to_string_lossy()
-                .replace('\\', "/");
-            result.insert(rel, sha256_hex(&std::fs::read(&path).unwrap()));
-        }
-    }
-}
-
-fn copy_tree(from: &Path, to: &Path) {
-    std::fs::create_dir_all(to).unwrap();
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(from)
-        .unwrap()
-        .flatten()
-        .map(|entry| entry.path())
-        .collect();
-    entries.sort();
-    for path in entries {
-        let dest = to.join(path.file_name().unwrap());
-        if path.is_dir() {
-            copy_tree(&path, &dest);
-        } else {
-            std::fs::copy(&path, &dest).unwrap();
-        }
-    }
-}
+static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn env_of(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
     pairs
         .iter()
         .map(|(key, value)| (key.to_string(), value.to_string()))
         .collect()
-}
-
-fn expect_error<T>(result: wayside::Result<T>) -> Error {
-    match result {
-        Ok(_) => panic!("the operation succeeded where the pin requires a refusal"),
-        Err(error) => error,
-    }
-}
-
-struct CliOutput {
-    status: i32,
-    stdout: String,
-    stderr: String,
-}
-
-fn run_cli(store: &Path, args: &[&str]) -> CliOutput {
-    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
-        .arg("--store")
-        .arg(store)
-        .args(args)
-        .output()
-        .unwrap();
-    CliOutput {
-        status: output.status.code().unwrap_or(-1),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-    }
 }
 
 /// Drive the CLI with a deadline, for the pin whose Python
@@ -195,19 +95,6 @@ fn run_cli_timed(store: &Path, args: &[&str], timeout: Duration) -> CliOutput {
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-}
-
-fn damage_manifest_json(
-    store: &Path,
-    session: &str,
-    sequence: i64,
-    damage: &dyn Fn(&mut serde_json::Value),
-) {
-    let path = manifest_path(store, session, sequence);
-    let mut value: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    damage(&mut value);
-    std::fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
 }
 
 #[test]
@@ -581,6 +468,60 @@ fn flipped_memory_byte_fails_restore_and_places_nothing() {
     assert!(!target.exists());
 }
 
+// WS-A55: the payload reading family's presence arms. A recorded
+// payload removed from a written checkpoint draws the missing
+// tail of the corrupt checkpoint refusal, through restore and
+// through verify alike, and nothing is placed. The family's
+// mismatch arms stand pinned by the flipped byte pins above.
+
+#[test]
+fn missing_payload_fails_restore_and_verify_and_places_nothing() {
+    let base = temp_dir("missing-payload");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"original bytes")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    std::fs::remove_file(
+        checkpoint_dir(&store, "alpha", 1)
+            .join("files")
+            .join("a.txt"),
+    )
+    .unwrap();
+    let target = base.join("target");
+    let error = expect_error(restore(&store, "alpha", 1, &target));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error.message().contains("the payload for a.txt is missing"),
+        "{}",
+        error.message()
+    );
+    assert!(!target.exists());
+    let error = expect_error(wayside::verify_checkpoint(&store, "alpha", 1));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error.message().contains("the payload for a.txt is missing"),
+        "{}",
+        error.message()
+    );
+}
+
+#[test]
+fn missing_memory_document_fails_restore_and_places_nothing() {
+    let base = temp_dir("missing-memory");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"memory bytes").unwrap();
+    std::fs::remove_file(checkpoint_dir(&store, "alpha", 1).join("memory.bin")).unwrap();
+    let target = base.join("target");
+    let error = expect_error(restore(&store, "alpha", 1, &target));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error.message().contains("the memory document is missing"),
+        "{}",
+        error.message()
+    );
+    assert!(!target.exists());
+}
+
 #[test]
 fn a_checkpoint_never_changes_once_written() {
     let base = temp_dir("immutable");
@@ -653,17 +594,6 @@ fn directory_at_memory_path_fails_restore_and_places_nothing() {
         error.message()
     );
     assert!(!target.exists());
-}
-
-fn damage_manifest_text(
-    store: &Path,
-    session: &str,
-    sequence: i64,
-    damage: &dyn Fn(&str) -> String,
-) {
-    let path = manifest_path(store, session, sequence);
-    let text = std::fs::read_to_string(&path).unwrap();
-    std::fs::write(&path, damage(&text)).unwrap();
 }
 
 #[test]
@@ -2252,6 +2182,55 @@ fn cli_double_dash_ends_option_parsing() {
     );
 }
 
+// WS-A49: the double dash is the separator at the top level
+// too. Standing before the subcommand, it ends top level
+// option parsing, and the next token is the command whatever
+// it looks like, as argparse gives it. On the code this pin
+// was written against, the separator landed in the extras and
+// the invocation was refused as unrecognized arguments.
+#[test]
+fn cli_double_dash_before_the_command_still_runs_it() {
+    let base = temp_dir("cli-top-separator");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
+        .arg("--store")
+        .arg(&store)
+        .arg("--")
+        .arg("list")
+        .arg("alpha")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert_eq!(output.status.code().unwrap_or(-1), 0, "{stdout}");
+    assert!(stdout.starts_with("1 "), "{stdout}");
+}
+
+// WS-A49: an option like token after the top level separator
+// is taken as the command and refused as an invalid choice,
+// the refusal argparse gives. On the code this pin was written
+// against, the token landed in the extras, no command was ever
+// taken, and the report named the required arguments instead.
+#[test]
+fn cli_token_after_the_top_level_separator_is_the_command() {
+    let base = temp_dir("cli-top-separator-choice");
+    let store = base.join("store");
+    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
+        .arg("--store")
+        .arg(&store)
+        .arg("--")
+        .arg("--bogus")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(output.status.code().unwrap_or(-1), 2, "{stderr}");
+    assert!(
+        stderr.contains("argument command: invalid choice: '--bogus'"),
+        "{stderr}"
+    );
+}
+
 // WS-A45 with WS-A26: the help texts print through the same
 // checked writer as command output, so a help print pointed at
 // an unwritable output draws the same output refusal at exit 1
@@ -2278,6 +2257,50 @@ fn cli_help_fails_when_its_output_cannot_be_written() {
             .contains("error: the command output cannot be written"),
         "{}",
         result.stderr
+    );
+}
+
+// WS-A68: the bare short help form. The pins above drive the
+// long form alone and WS-A63's pins drive the equals forms
+// of the long name, but the bare -h travels its own equality
+// arm at each parser level, distinct from the resolve_long
+// path the long form takes: dispatch's arm at the top level
+// and parse_sub's arm inside a subcommand. Each pin below
+// answers the plausible wrong form of a repair at its own
+// level, the short form dropped from that level's help arm,
+// which would send the token to that level's extras
+// collection and draw the unrecognized arguments refusal at
+// exit 2 with no help text on stdout.
+
+#[test]
+fn cli_short_help_prints_the_usage_and_exits_zero_at_the_top_level() {
+    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
+        .arg("-h")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert_eq!(output.status.code().unwrap_or(-1), 0, "{stdout}");
+    assert!(
+        stdout.starts_with("usage: wayside [-h] --store STORE"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("record a new checkpoint of a session"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn cli_short_help_prints_the_usage_and_exits_zero_in_a_subcommand() {
+    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
+        .args(["checkpoint", "-h"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert_eq!(output.status.code().unwrap_or(-1), 0, "{stdout}");
+    assert!(
+        stdout.contains("usage: wayside checkpoint [-h] --state STATE"),
+        "{stdout}"
     );
 }
 
@@ -2446,6 +2469,63 @@ fn checkpoint_fails_when_the_state_directory_cannot_be_listed() {
     assert!(!checkpoint_dir(&store, "alpha", 1).exists());
 }
 
+/// WS-A27: a state tree holding a name that is not valid
+/// UTF-8 is refused at the walk. On the code this pin was
+/// written against, the name was recorded under its lossy
+/// rendering and restored under that rendering, silently.
+#[cfg(unix)]
+#[test]
+fn checkpoint_refuses_a_state_file_whose_name_is_not_valid_utf8() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let base = temp_dir("walk-non-utf8-file");
+    let store = base.join("store");
+    let state = base.join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(state.join("plain.txt"), b"plain").unwrap();
+    let bad = std::ffi::OsString::from_vec(b"bad-\xff.txt".to_vec());
+    std::fs::write(state.join(bad), b"bad bytes").unwrap();
+    let error = expect_error(checkpoint(&store, "alpha", &state, None, b""));
+    assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert!(
+        error.message().contains("not valid UTF-8"),
+        "{}",
+        error.message()
+    );
+    assert!(!checkpoint_dir(&store, "alpha", 1).exists());
+    // The refusal consumed no sequence: the next clean
+    // checkpoint of the session takes sequence 1.
+    let clean = make_state(&base.join("clean"), &[("a.txt", b"a")]);
+    let manifest = checkpoint(&store, "alpha", &clean, None, b"").unwrap();
+    assert_eq!(manifest.sequence, 1);
+}
+
+/// WS-A27: the directory shape of the same refusal. On the
+/// code this pin was written against, the directory's name
+/// was recorded under its lossy rendering and its payload
+/// restored under that rendering.
+#[cfg(unix)]
+#[test]
+fn checkpoint_refuses_a_state_directory_whose_name_is_not_valid_utf8() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let base = temp_dir("walk-non-utf8-dir");
+    let store = base.join("store");
+    let state = base.join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    let dir = state.join(std::ffi::OsString::from_vec(b"bad-\xfe".to_vec()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("inner.txt"), b"inner").unwrap();
+    let error = expect_error(checkpoint(&store, "alpha", &state, None, b""));
+    assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert!(
+        error.message().contains("not valid UTF-8"),
+        "{}",
+        error.message()
+    );
+    assert!(!checkpoint_dir(&store, "alpha", 1).exists());
+}
+
 #[test]
 fn cli_memory_symlink_is_refused_with_its_own_message() {
     let base = temp_dir("cli-memory-link");
@@ -2493,33 +2573,6 @@ fn fixture_root(name: &str) -> PathBuf {
         .join("tests")
         .join("fixtures")
         .join(name)
-}
-
-fn tree_bytes(root: &Path) -> BTreeMap<String, Vec<u8>> {
-    let mut result = BTreeMap::new();
-    tree_bytes_into(root, root, &mut result);
-    result
-}
-
-fn tree_bytes_into(root: &Path, dir: &Path, result: &mut BTreeMap<String, Vec<u8>>) {
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
-        .unwrap()
-        .flatten()
-        .map(|entry| entry.path())
-        .collect();
-    entries.sort();
-    for path in entries {
-        if path.is_dir() {
-            tree_bytes_into(root, &path, result);
-        } else {
-            let rel = path
-                .strip_prefix(root)
-                .unwrap()
-                .to_string_lossy()
-                .replace('\\', "/");
-            result.insert(rel, std::fs::read(&path).unwrap());
-        }
-    }
 }
 
 fn fixture_case(name: &str, sessions: &[(&str, &[i64])], grow_session: &str, next_sequence: i64) {
