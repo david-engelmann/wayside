@@ -461,8 +461,19 @@ fn dispatch(argv: &[String]) -> Result<ExitCode, Error> {
     let mut command: Option<String> = None;
     let mut rest: Vec<String> = Vec::new();
     let mut extras: Vec<String> = Vec::new();
+    let mut after_separator = false;
     while index < argv.len() {
         let token = &argv[index];
+        if !after_separator && token == "--" {
+            after_separator = true;
+            index += 1;
+            continue;
+        }
+        if after_separator {
+            command = Some(token.clone());
+            rest = argv[index + 1..].to_vec();
+            break;
+        }
         if token == "-h" || token == "--help" {
             print_output(&format!("{MAIN_HELP}\n"))?;
             return Ok(ExitCode::from(0));
