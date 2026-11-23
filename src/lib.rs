@@ -156,7 +156,7 @@ pub fn py_repr(text: &str) -> String {
                 out.push('\\');
                 out.push(c);
             }
-            c if (c as u32) < 0x20 || (c as u32) == 0x7f => {
+            c if (c as u32) < 0x20 || (0x7f..=0x9f).contains(&(c as u32)) => {
                 let n = c as u32;
                 if n <= 0xff {
                     out.push_str(&format!("\\x{n:02x}"));
@@ -267,7 +267,7 @@ fn validate_env(env: &BTreeMap<String, String>) -> Result<()> {
 /// lands in the Float variant and fails every integer check, as
 /// it did under the Python type checks.
 #[derive(Debug, Clone, PartialEq)]
-pub enum StrictValue {
+enum StrictValue {
     Null,
     Bool(bool),
     Int(i128),
@@ -377,7 +377,7 @@ fn duplicate_key_of(error_text: &str) -> Option<String> {
     let marker = "wayside-duplicate-key\x1f";
     let start = error_text.find(marker)? + marker.len();
     let rest = &error_text[start..];
-    let end = rest.find(" at line ").unwrap_or(rest.len());
+    let end = rest.rfind(" at line ").unwrap_or(rest.len());
     Some(rest[..end].to_string())
 }
 
@@ -554,20 +554,27 @@ fn validate_recorded_path(rel: &StrictValue, path: &Path) -> Result<String> {
             ),
         ));
     }
+    if let Some((first, _)) = text.split_once('/') {
+        if RESERVED_TOP_LEVEL.contains(&first) {
+            return Err(corrupt(
+                path,
+                &format!(
+                    "the recorded path {} stands below the name of a file \
+                     restore writes, so it is not a path a checkpoint may record",
+                    py_repr(&text)
+                ),
+            ));
+        }
+    }
     Ok(text)
 }
 
 /// Whether a recorded path list stands in path order with no
 /// path repeated (WS-A18): the order and uniqueness judgement
-/// the manifest validators share.
+/// the manifest validators share, judged on adjacent entries,
+/// which decide the fact directly (WS-A35).
 fn paths_in_order_without_repeats(paths: &[String]) -> bool {
-    let mut sorted = paths.to_vec();
-    sorted.sort();
-    if paths != sorted.as_slice() {
-        return false;
-    }
-    sorted.dedup();
-    sorted.len() == paths.len()
+    paths.windows(2).all(|pair| pair[0] < pair[1])
 }
 
 /// Whether a recorded path list repeats no path, in any order
@@ -839,6 +846,18 @@ fn validate_directories(
         .iter()
         .flat_map(|database| database.members.iter().map(|member| member.path.as_str()))
         .collect();
+    // The stands below judgements are decided by a
+    // directory's ancestors, its prefixes cut at the slash
+    // boundaries: a recorded path stands above the directory
+    // exactly when it equals one of them. The file list
+    // stands in path order here, refused otherwise by
+    // validate_manifest before this call, so each ancestor
+    // is answered by binary search, and the member paths
+    // stand in bundle order, so they are gathered once here
+    // into a set of the same slices (WS-A65). The standing
+    // form scanned both lists for every directory and built
+    // a candidate prefix string for each pair it tested.
+    let member_path_set: BTreeSet<&str> = member_paths.iter().copied().collect();
     for directory in &directories {
         if file_paths.iter().any(|file| file == directory) {
             return Err(corrupt(
@@ -872,6 +891,25 @@ fn validate_directories(
             return Err(corrupt(
                 path,
                 &format!("the directory {directory} stands above a database member"),
+            ));
+        }
+        if directory.match_indices('/').any(|(index, _)| {
+            file_paths
+                .binary_search_by(|file| file.as_str().cmp(&directory[..index]))
+                .is_ok()
+        }) {
+            return Err(corrupt(
+                path,
+                &format!("the directory {directory} stands below a recorded file"),
+            ));
+        }
+        if directory
+            .match_indices('/')
+            .any(|(index, _)| member_path_set.contains(&directory[..index]))
+        {
+            return Err(corrupt(
+                path,
+                &format!("the directory {directory} stands below a database member"),
             ));
         }
     }
@@ -1046,7 +1084,7 @@ fn validate_manifest(
                 && object_get(pairs, "sequence").is_some() =>
         {
             let fork_session = match object_get(pairs, "session") {
-                Some(StrictValue::Str(text)) => text.clone(),
+                Some(StrictValue::Str(text)) if validate_session_id(text).is_ok() => text.clone(),
                 _ => {
                     return Err(corrupt(
                         path,
@@ -1054,12 +1092,6 @@ fn validate_manifest(
                     ))
                 }
             };
-            if validate_session_id(&fork_session).is_err() {
-                return Err(corrupt(
-                    path,
-                    "the forked_from session is not a safe session id",
-                ));
-            }
             let fork_sequence = match object_get(pairs, "sequence") {
                 Some(StrictValue::Int(number)) if *number >= 1 => *number,
                 _ => {
@@ -1262,6 +1294,33 @@ fn render_directories_array(directories: &[String], level: usize, out: &mut Stri
     out.push(']');
 }
 
+/// Render one manifest field (WS-A38): a fresh string
+/// holding the field's indent, its escaped key, and the
+/// colon separator, with the value rendered by the caller,
+/// the shape every field of render_manifest shares.
+fn render_field(key: &str, render: impl FnOnce(&mut String)) -> String {
+    let mut field = String::new();
+    write_indent(&mut field, 1);
+    escape_json_string(key, &mut field);
+    field.push_str(": ");
+    render(&mut field);
+    field
+}
+
+/// The format a manifest's content names (WS-A72): /1 when
+/// both conditional lists stand empty, /2 when either
+/// stands. The derivation stands stated once here, where
+/// new_manifest and render_manifest once each stated it
+/// under WS-A14's discipline, so a change to the rule is
+/// taken up at this one seat or not at all.
+fn manifest_format(databases: &[DatabaseEntry], directories: &[String]) -> &'static str {
+    if databases.is_empty() && directories.is_empty() {
+        FORMAT_NAME
+    } else {
+        FORMAT_V2
+    }
+}
+
 /// Render a manifest exactly as the Python implementation's
 /// sorted, two space indented json rendering renders it, with
 /// no trailing newline. The stored manifest file carries this
@@ -1283,119 +1342,87 @@ pub fn render_manifest(manifest: &Manifest) -> String {
     // its list is non empty, so a hand built value renders
     // the content it carries under the format that content
     // names, and no field it carries is dropped.
-    let effective_format = if manifest.databases.is_empty() && manifest.directories.is_empty() {
-        FORMAT_NAME
-    } else {
-        FORMAT_V2
-    };
+    let effective_format = manifest_format(&manifest.databases, &manifest.directories);
     let mut out = String::new();
     out.push_str("{\n");
     let mut fields: Vec<String> = Vec::new();
-    let mut field = String::new();
-    write_indent(&mut field, 1);
-    escape_json_string("created_at", &mut field);
-    field.push_str(": ");
-    escape_json_string(&manifest.created_at, &mut field);
-    fields.push(field);
+    fields.push(render_field("created_at", |field| {
+        escape_json_string(&manifest.created_at, field);
+    }));
 
     if !manifest.databases.is_empty() {
-        let mut field = String::new();
-        write_indent(&mut field, 1);
-        escape_json_string("databases", &mut field);
-        field.push_str(": ");
-        render_databases_array(&manifest.databases, 1, &mut field);
-        fields.push(field);
+        fields.push(render_field("databases", |field| {
+            render_databases_array(&manifest.databases, 1, field);
+        }));
     }
 
     if !manifest.directories.is_empty() {
-        let mut field = String::new();
-        write_indent(&mut field, 1);
-        escape_json_string("directories", &mut field);
-        field.push_str(": ");
-        render_directories_array(&manifest.directories, 1, &mut field);
-        fields.push(field);
+        fields.push(render_field("directories", |field| {
+            render_directories_array(&manifest.directories, 1, field);
+        }));
     }
 
-    let mut field = String::new();
-    write_indent(&mut field, 1);
-    escape_json_string("env", &mut field);
-    field.push_str(": ");
-    render_env_object(&manifest.env, 1, &mut field);
-    fields.push(field);
+    fields.push(render_field("env", |field| {
+        render_env_object(&manifest.env, 1, field);
+    }));
 
-    let mut field = String::new();
-    write_indent(&mut field, 1);
-    escape_json_string("files", &mut field);
-    field.push_str(": ");
-    render_entries_array(
-        &manifest
-            .files
-            .iter()
-            .map(|entry| (entry.path.as_str(), entry.sha256.as_str(), entry.size))
-            .collect::<Vec<_>>(),
-        1,
-        &mut field,
-    );
-    fields.push(field);
+    fields.push(render_field("files", |field| {
+        render_entries_array(
+            &manifest
+                .files
+                .iter()
+                .map(|entry| (entry.path.as_str(), entry.sha256.as_str(), entry.size))
+                .collect::<Vec<_>>(),
+            1,
+            field,
+        );
+    }));
 
     if let Some(fork) = &manifest.forked_from {
-        let mut field = String::new();
-        write_indent(&mut field, 1);
-        escape_json_string("forked_from", &mut field);
-        field.push_str(": {\n");
-        write_indent(&mut field, 2);
-        escape_json_string("sequence", &mut field);
-        field.push_str(": ");
-        field.push_str(&fork.sequence.to_string());
-        field.push_str(",\n");
-        write_indent(&mut field, 2);
-        escape_json_string("session", &mut field);
-        field.push_str(": ");
-        escape_json_string(&fork.session, &mut field);
-        field.push('\n');
-        write_indent(&mut field, 1);
-        field.push('}');
-        fields.push(field);
+        fields.push(render_field("forked_from", |field| {
+            field.push_str("{\n");
+            write_indent(field, 2);
+            escape_json_string("sequence", field);
+            field.push_str(": ");
+            field.push_str(&fork.sequence.to_string());
+            field.push_str(",\n");
+            write_indent(field, 2);
+            escape_json_string("session", field);
+            field.push_str(": ");
+            escape_json_string(&fork.session, field);
+            field.push('\n');
+            write_indent(field, 1);
+            field.push('}');
+        }));
     }
 
-    let mut field = String::new();
-    write_indent(&mut field, 1);
-    escape_json_string("format", &mut field);
-    field.push_str(": ");
-    escape_json_string(effective_format, &mut field);
-    fields.push(field);
+    fields.push(render_field("format", |field| {
+        escape_json_string(effective_format, field);
+    }));
 
-    let mut field = String::new();
-    write_indent(&mut field, 1);
-    escape_json_string("memory", &mut field);
-    field.push_str(": {\n");
-    write_indent(&mut field, 2);
-    escape_json_string("sha256", &mut field);
-    field.push_str(": ");
-    escape_json_string(&manifest.memory.sha256, &mut field);
-    field.push_str(",\n");
-    write_indent(&mut field, 2);
-    escape_json_string("size", &mut field);
-    field.push_str(": ");
-    field.push_str(&manifest.memory.size.to_string());
-    field.push('\n');
-    write_indent(&mut field, 1);
-    field.push('}');
-    fields.push(field);
+    fields.push(render_field("memory", |field| {
+        field.push_str("{\n");
+        write_indent(field, 2);
+        escape_json_string("sha256", field);
+        field.push_str(": ");
+        escape_json_string(&manifest.memory.sha256, field);
+        field.push_str(",\n");
+        write_indent(field, 2);
+        escape_json_string("size", field);
+        field.push_str(": ");
+        field.push_str(&manifest.memory.size.to_string());
+        field.push('\n');
+        write_indent(field, 1);
+        field.push('}');
+    }));
 
-    let mut field = String::new();
-    write_indent(&mut field, 1);
-    escape_json_string("sequence", &mut field);
-    field.push_str(": ");
-    field.push_str(&manifest.sequence.to_string());
-    fields.push(field);
+    fields.push(render_field("sequence", |field| {
+        field.push_str(&manifest.sequence.to_string());
+    }));
 
-    let mut field = String::new();
-    write_indent(&mut field, 1);
-    escape_json_string("session", &mut field);
-    field.push_str(": ");
-    escape_json_string(&manifest.session, &mut field);
-    fields.push(field);
+    fields.push(render_field("session", |field| {
+        escape_json_string(&manifest.session, field);
+    }));
 
     out.push_str(&fields.join(",\n"));
     out.push_str("\n}");
@@ -1545,9 +1572,12 @@ fn is_sequence_dir_name(name: &str) -> bool {
 /// even though every read of it is refused by the link checks,
 /// and a residue directory under a temporary name never counts.
 /// A digit name counts only when it is the canonical rendering
-/// of its value, the name sequence_name writes, so an alias
-/// spelling with extra leading zeros names no published
-/// checkpoint and is passed over like any other residue.
+/// of its value, the name sequence_name writes, and only when
+/// that value is one a writer assigns, which is any value from
+/// 1 upward, so an alias spelling with extra leading zeros
+/// names no published checkpoint, and neither does the
+/// canonical spelling of zero, and both are passed over like
+/// any other residue (WS-A56).
 fn published_sequences(root: &Path, session: &str) -> Vec<i64> {
     let ck_dir = checkpoints_dir(root, session);
     let entries = match fs::read_dir(&ck_dir) {
@@ -1559,7 +1589,7 @@ fn published_sequences(root: &Path, session: &str) -> Vec<i64> {
         let name = entry.file_name().to_string_lossy().into_owned();
         if is_sequence_dir_name(&name) && entry.path().is_dir() {
             if let Ok(sequence) = name.parse::<i64>() {
-                if name == sequence_name(sequence) {
+                if sequence >= 1 && name == sequence_name(sequence) {
                     sequences.push(sequence);
                 }
             }
@@ -1580,6 +1610,17 @@ fn require_session(root: &Path, session: &str) -> Result<()> {
     }
 }
 
+/// The corrupt checkpoint refusal (WS-A52): the one statement
+/// of the prefix every refusal that names a checkpoint corrupt
+/// from the payload reading family opens with, the sequence
+/// and the session named, with the caller's tail stating what
+/// stands corrupt about it.
+fn corrupt_checkpoint(session: &str, sequence: i64, tail: &str) -> Error {
+    Error::Corrupt(format!(
+        "checkpoint {sequence} of session {session} is corrupt, {tail}"
+    ))
+}
+
 /// Read and strictly validate one manifest, changing nothing
 /// on disk.
 fn load_manifest(root: &Path, session: &str, sequence: i64) -> Result<Manifest> {
@@ -1588,11 +1629,12 @@ fn load_manifest(root: &Path, session: &str, sequence: i64) -> Result<Manifest> 
     let path = ck.join(MANIFEST_NAME);
     if !path.is_file() {
         if ck.is_dir() {
-            return Err(Error::Corrupt(format!(
-                "checkpoint {sequence} of session {session} is corrupt, \
-                 its manifest is missing or is not a regular file, \
-                 so the checkpoint cannot be read"
-            )));
+            return Err(corrupt_checkpoint(
+                session,
+                sequence,
+                "its manifest is missing or is not a regular file, \
+                 so the checkpoint cannot be read",
+            ));
         }
         return Err(Error::NotFound(format!(
             "session {session} holds no checkpoint {sequence} in the store at {}",
@@ -1620,6 +1662,43 @@ fn load_manifest(root: &Path, session: &str, sequence: i64) -> Result<Manifest> 
     validate_manifest(&data, &path, session, sequence)
 }
 
+/// Read one recorded byte string from its path inside a
+/// checkpoint and check it against its recorded hash and
+/// size. The subject phrase names the byte string in the
+/// refusal tails: the payload for a recorded path, or the
+/// memory document.
+fn read_recorded(
+    path: &Path,
+    session: &str,
+    sequence: i64,
+    subject: &str,
+    sha256: &str,
+    size: i128,
+) -> Result<Vec<u8>> {
+    if !path.is_file() {
+        return Err(corrupt_checkpoint(
+            session,
+            sequence,
+            &format!("{subject} is missing or is not a regular file"),
+        ));
+    }
+    let data = fs::read(path).map_err(|exc| {
+        corrupt_checkpoint(
+            session,
+            sequence,
+            &format!("{subject} cannot be read, {exc}"),
+        )
+    })?;
+    if data.len() as i128 != size || sha256_hex(&data) != sha256 {
+        return Err(corrupt_checkpoint(
+            session,
+            sequence,
+            &format!("{subject} does not match its recorded hash and size"),
+        ));
+    }
+    Ok(data)
+}
+
 /// Read one payload of a checkpoint from its files area and
 /// check it against its recorded hash and size.
 fn read_payload(
@@ -1630,29 +1709,14 @@ fn read_payload(
     sha256: &str,
     size: i128,
 ) -> Result<Vec<u8>> {
-    let mut payload = ck.join(FILES_NAME);
-    for part in rel.split('/') {
-        payload.push(part);
-    }
-    if !payload.is_file() {
-        return Err(Error::Corrupt(format!(
-            "checkpoint {sequence} of session {session} is corrupt, \
-             the payload for {rel} is missing"
-        )));
-    }
-    let data = fs::read(&payload).map_err(|exc| {
-        Error::Corrupt(format!(
-            "checkpoint {sequence} of session {session} is corrupt, \
-             the payload for {rel} cannot be read, {exc}"
-        ))
-    })?;
-    if data.len() as i128 != size || sha256_hex(&data) != sha256 {
-        return Err(Error::Corrupt(format!(
-            "checkpoint {sequence} of session {session} is corrupt, \
-             the payload for {rel} does not match its recorded hash and size"
-        )));
-    }
-    Ok(data)
+    read_recorded(
+        &join_rel(&ck.join(FILES_NAME), rel),
+        session,
+        sequence,
+        &format!("the payload for {rel}"),
+        sha256,
+        size,
+    )
 }
 
 /// Read every payload of a checkpoint and check it against the
@@ -1694,26 +1758,14 @@ fn read_verified(
             entries.push((member.path.clone(), data));
         }
     }
-    let memory_path = ck.join(MEMORY_NAME);
-    if !memory_path.is_file() {
-        return Err(Error::Corrupt(format!(
-            "checkpoint {sequence} of session {session} is corrupt, \
-             the memory document is missing"
-        )));
-    }
-    let memory = fs::read(&memory_path).map_err(|exc| {
-        Error::Corrupt(format!(
-            "checkpoint {sequence} of session {session} is corrupt, \
-             the memory document cannot be read, {exc}"
-        ))
-    })?;
-    if memory.len() as i128 != manifest.memory.size || sha256_hex(&memory) != manifest.memory.sha256
-    {
-        return Err(Error::Corrupt(format!(
-            "checkpoint {sequence} of session {session} is corrupt, \
-             the memory document does not match its recorded hash and size"
-        )));
-    }
+    let memory = read_recorded(
+        &ck.join(MEMORY_NAME),
+        session,
+        sequence,
+        "the memory document",
+        &manifest.memory.sha256,
+        manifest.memory.size,
+    )?;
     Ok((entries, memory))
 }
 
@@ -1954,7 +2006,10 @@ impl Default for StateTreeReader {
 /// sorted by path, beside the files. Symbolic links and non
 /// regular files are refused, because a link can name bytes
 /// outside the state directory and a checkpoint records only
-/// what the caller can see in the tree itself. A directory
+/// what the caller can see in the tree itself. An entry whose
+/// name is not valid UTF-8 is refused too, because the record
+/// carries names as text, and a name the record cannot carry
+/// exactly it does not carry at all (WS-A27). A directory
 /// that cannot be listed fails the read, naming that
 /// directory, instead of publishing a partial tree as if it
 /// were complete.
@@ -1983,6 +2038,22 @@ fn read_state_dir(
     let mut dirs: Vec<PathBuf> = Vec::new();
     let mut files: Vec<PathBuf> = Vec::new();
     for path in listed {
+        // A name that is not valid UTF-8 cannot be recorded:
+        // rel_of renders it lossily, so it would stand in the
+        // record under a mangled rendering and be restored
+        // under that rendering, silently, and two names
+        // mangling to one rendering would publish a manifest
+        // repeating a path, which every later read refuses as
+        // corrupt (WS-A27). Refuse the entry here, in the
+        // family of the link and non regular file refusals
+        // below.
+        if path.file_name().is_some_and(|name| name.to_str().is_none()) {
+            return Err(Error::wayside(format!(
+                "the state directory at {} holds an entry whose name is \
+                 not valid UTF-8 text, which a checkpoint does not record",
+                dir.display()
+            )));
+        }
         if fs::metadata(&path)
             .map(|meta| meta.is_dir())
             .unwrap_or(false)
@@ -2013,6 +2084,19 @@ fn read_state_dir(
                  which a checkpoint does not record"
             )));
         }
+        // A name carrying a backslash cannot be recorded:
+        // rel_of renders the backslash as a slash, so the
+        // entry would stand in the record under a path
+        // that is not its own (WS-A33).
+        if path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().contains('\\'))
+        {
+            return Err(Error::wayside(format!(
+                "the state directory holds an entry whose name carries \
+                 a backslash at {rel}, which a checkpoint does not record"
+            )));
+        }
         if !rel.contains('/') && RESERVED_TOP_LEVEL.contains(&rel.as_str()) {
             return Err(Error::wayside(format!(
                 "the state directory holds a top level directory named {rel}, \
@@ -2029,6 +2113,19 @@ fn read_state_dir(
             return Err(Error::wayside(format!(
                 "the state directory holds a symbolic link at {rel}, \
                  which a checkpoint does not record"
+            )));
+        }
+        // A name carrying a backslash cannot be recorded:
+        // rel_of renders the backslash as a slash, so the
+        // entry would stand in the record under a path
+        // that is not its own (WS-A33).
+        if path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().contains('\\'))
+        {
+            return Err(Error::wayside(format!(
+                "the state directory holds an entry whose name carries \
+                 a backslash at {rel}, which a checkpoint does not record"
             )));
         }
         if !path.is_file() {
@@ -2061,10 +2158,7 @@ fn read_state_dir(
 /// separators and pushing the parts onto the root.
 fn write_entries(root: &Path, entries: &[(String, Vec<u8>)]) -> io::Result<()> {
     for (rel, data) in entries {
-        let mut dest = root.to_path_buf();
-        for part in rel.split('/') {
-            dest.push(part);
-        }
+        let dest = join_rel(root, rel);
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -2160,11 +2254,7 @@ fn new_manifest(
     forked_from: Option<ForkRef>,
 ) -> Manifest {
     Manifest {
-        format: if databases.is_empty() && directories.is_empty() {
-            FORMAT_NAME.to_string()
-        } else {
-            FORMAT_V2.to_string()
-        },
+        format: manifest_format(&databases, &directories).to_string(),
         session: session.to_string(),
         sequence,
         created_at: now_isoformat(),
@@ -2382,10 +2472,11 @@ pub fn checkpoint_with_reader(
 /// Record a new checkpoint declaring database bundles
 /// (WS-11). Each declared path names a file inside the state
 /// directory whose bundle is captured under the consistency
-/// proof of WS-13, and the checkpoint is recorded in
-/// wayside-checkpoint/2. With no declaration the result is a
-/// wayside-checkpoint/1 checkpoint, byte for byte as the
-/// landed checkpoint writes it.
+/// proof of WS-13. The checkpoint is recorded in
+/// wayside-checkpoint/2 when it declares a database or records
+/// an empty directory, and in wayside-checkpoint/1 otherwise
+/// (WS-21). With no declaration the call writes byte for byte
+/// what the landed checkpoint writes.
 pub fn checkpoint_with_databases(
     store: &Path,
     session: &str,

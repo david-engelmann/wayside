@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use pyo3::create_exception;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDict};
+use pyo3::types::{PyBool, PyDict, PyInt};
 
 use wayside_core::{CheckpointInfo, Comparison, DatabaseStanding, Error, Manifest};
 
@@ -51,39 +51,53 @@ fn to_py_error(error: Error) -> PyErr {
 /// 1 and 0 and a sequence is never meant as a truth value. Any
 /// other value converts the way Python converts an integer, and
 /// the library itself judges whether the number names a sequence
-/// it can use.
+/// it can use. An integer wider than the i64 range a sequence
+/// stands in is refused with the library's own invalid sequence
+/// refusal, the class the command line gives the same value,
+/// rather than the OverflowError its extraction raises (WS-A50).
 fn sequence_argument(value: &Bound<'_, PyAny>, name: &str) -> PyResult<i64> {
     if value.is_instance_of::<PyBool>() {
         Err(PyTypeError::new_err(format!(
             "{name} must be an integer, not a boolean"
         )))
     } else {
-        value.extract::<i64>()
+        value.extract::<i64>().map_err(|error| {
+            // An integer outside the i64 range fails extraction
+            // with an OverflowError, outside the exception ladder
+            // every refusal of this binding travels in. The value
+            // is an integer, only wider than a sequence can be,
+            // so it draws the invalid sequence refusal above
+            // (WS-A50). Any other type keeps the TypeError its
+            // extraction raised.
+            if value.is_instance_of::<PyInt>() {
+                InvalidNameError::new_err(format!(
+                    "invalid sequence {value}, use a positive integer"
+                ))
+            } else {
+                error
+            }
+        })
     }
 }
 
 /// Translate one validated manifest into a plain dictionary
 /// carrying every field the manifest carries, in the shape of
-/// the wayside-checkpoint formats themselves. The databases
+/// the wayside-checkpoint formats themselves. The dictionaries
+/// stand in the format's own sorted field order, so a caller
+/// who serializes a returned manifest with an order preserving
+/// writer meets every field in the stored order. The databases
 /// list stands empty for a wayside-checkpoint/1 manifest, and
 /// the directories list stands empty for a manifest that
 /// records no empty directory, as
 /// the forked_from entry stands empty for an unforked one.
 fn manifest_dict(py: Python<'_>, manifest: &Manifest) -> PyResult<Py<PyDict>> {
-    let dict = PyDict::new(py);
-    dict.set_item("format", &manifest.format)?;
-    dict.set_item("session", &manifest.session)?;
-    dict.set_item("sequence", manifest.sequence)?;
-    dict.set_item("created_at", &manifest.created_at)?;
     let env = PyDict::new(py);
     for (key, value) in &manifest.env {
         env.set_item(key, value)?;
     }
-    dict.set_item("env", env)?;
     let memory = PyDict::new(py);
     memory.set_item("sha256", &manifest.memory.sha256)?;
     memory.set_item("size", manifest.memory.size)?;
-    dict.set_item("memory", memory)?;
     let mut files = Vec::new();
     for entry in &manifest.files {
         let file = PyDict::new(py);
@@ -92,12 +106,8 @@ fn manifest_dict(py: Python<'_>, manifest: &Manifest) -> PyResult<Py<PyDict>> {
         file.set_item("size", entry.size)?;
         files.push(file.unbind());
     }
-    dict.set_item("files", files)?;
     let mut databases = Vec::new();
     for entry in &manifest.databases {
-        let database = PyDict::new(py);
-        database.set_item("path", &entry.path)?;
-        database.set_item("bundle_sha256", &entry.bundle_sha256)?;
         let mut members = Vec::new();
         for member in &entry.members {
             let member_dict = PyDict::new(py);
@@ -106,21 +116,32 @@ fn manifest_dict(py: Python<'_>, manifest: &Manifest) -> PyResult<Py<PyDict>> {
             member_dict.set_item("size", member.size)?;
             members.push(member_dict.unbind());
         }
+        let database = PyDict::new(py);
+        database.set_item("bundle_sha256", &entry.bundle_sha256)?;
         database.set_item("members", members)?;
+        database.set_item("path", &entry.path)?;
         databases.push(database.unbind());
     }
-    dict.set_item("databases", databases)?;
-    dict.set_item("directories", &manifest.directories)?;
     let forked_from = match &manifest.forked_from {
         Some(lineage) => {
             let fork = PyDict::new(py);
-            fork.set_item("session", &lineage.session)?;
             fork.set_item("sequence", lineage.sequence)?;
+            fork.set_item("session", &lineage.session)?;
             Some(fork.unbind())
         }
         None => None,
     };
+    let dict = PyDict::new(py);
+    dict.set_item("created_at", &manifest.created_at)?;
+    dict.set_item("databases", databases)?;
+    dict.set_item("directories", &manifest.directories)?;
+    dict.set_item("env", env)?;
+    dict.set_item("files", files)?;
     dict.set_item("forked_from", forked_from)?;
+    dict.set_item("format", &manifest.format)?;
+    dict.set_item("memory", memory)?;
+    dict.set_item("sequence", manifest.sequence)?;
+    dict.set_item("session", &manifest.session)?;
     Ok(dict.unbind())
 }
 
