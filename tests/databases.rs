@@ -13,7 +13,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use sha2::{Digest, Sha256};
 use wayside::{
@@ -21,38 +20,15 @@ use wayside::{
     compare_checkpoints, fork, list_checkpoints, restore, rewind, show, verify_checkpoint,
     DatabaseStanding, Error, StateTreeReader, BUNDLE_BOUND,
 };
+mod common;
 
-const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-
-static COUNTER: AtomicUsize = AtomicUsize::new(0);
+use common::{
+    checkpoint_dir, copy_tree, damage_manifest_json, damage_manifest_text, declare, expect_error,
+    hash_tree, make_state, manifest_path, run_cli, sha256_hex, tree_bytes, EMPTY_SHA256,
+};
 
 fn temp_dir(tag: &str) -> PathBuf {
-    let count = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!(
-        "wayside-db-test-{}-{tag}-{count}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
-fn sha256_hex(data: &[u8]) -> String {
-    Sha256::digest(data)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
-fn make_state(base: &Path, files: &[(&str, &[u8])]) -> PathBuf {
-    let state = base.to_path_buf();
-    std::fs::create_dir_all(&state).unwrap();
-    for (rel, data) in files {
-        let path = state.join(rel);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, data).unwrap();
-    }
-    state
+    common::temp_dir("wayside-db-test", tag)
 }
 
 fn make_sparse_state(base: &Path, rel: &str, size: u64) -> PathBuf {
@@ -66,101 +42,6 @@ fn make_sparse_state(base: &Path, rel: &str, size: u64) -> PathBuf {
     state
 }
 
-fn checkpoint_dir(store: &Path, session: &str, sequence: i64) -> PathBuf {
-    store
-        .join("sessions")
-        .join(session)
-        .join("checkpoints")
-        .join(format!("{sequence:06}"))
-}
-
-fn manifest_path(store: &Path, session: &str, sequence: i64) -> PathBuf {
-    checkpoint_dir(store, session, sequence).join("manifest.json")
-}
-
-fn hash_tree(root: &Path) -> BTreeMap<String, String> {
-    let mut result = BTreeMap::new();
-    hash_tree_into(root, root, &mut result);
-    result
-}
-
-fn hash_tree_into(root: &Path, dir: &Path, result: &mut BTreeMap<String, String>) {
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
-        .unwrap()
-        .flatten()
-        .map(|entry| entry.path())
-        .collect();
-    entries.sort();
-    for path in entries {
-        if path.is_dir() {
-            hash_tree_into(root, &path, result);
-        } else if path.is_file() {
-            let rel = path
-                .strip_prefix(root)
-                .unwrap()
-                .to_string_lossy()
-                .replace('\\', "/");
-            result.insert(rel, sha256_hex(&std::fs::read(&path).unwrap()));
-        }
-    }
-}
-
-fn tree_bytes(root: &Path) -> BTreeMap<String, Vec<u8>> {
-    let mut result = BTreeMap::new();
-    tree_bytes_into(root, root, &mut result);
-    result
-}
-
-fn tree_bytes_into(root: &Path, dir: &Path, result: &mut BTreeMap<String, Vec<u8>>) {
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
-        .unwrap()
-        .flatten()
-        .map(|entry| entry.path())
-        .collect();
-    entries.sort();
-    for path in entries {
-        if path.is_dir() {
-            tree_bytes_into(root, &path, result);
-        } else {
-            let rel = path
-                .strip_prefix(root)
-                .unwrap()
-                .to_string_lossy()
-                .replace('\\', "/");
-            result.insert(rel, std::fs::read(&path).unwrap());
-        }
-    }
-}
-
-fn copy_tree(from: &Path, to: &Path) {
-    std::fs::create_dir_all(to).unwrap();
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(from)
-        .unwrap()
-        .flatten()
-        .map(|entry| entry.path())
-        .collect();
-    entries.sort();
-    for path in entries {
-        let dest = to.join(path.file_name().unwrap());
-        if path.is_dir() {
-            copy_tree(&path, &dest);
-        } else {
-            std::fs::copy(&path, &dest).unwrap();
-        }
-    }
-}
-
-fn expect_error<T>(result: wayside::Result<T>) -> Error {
-    match result {
-        Ok(_) => panic!("the operation succeeded where the pin requires a refusal"),
-        Err(error) => error,
-    }
-}
-
-fn declare(paths: &[&str]) -> Vec<String> {
-    paths.iter().map(|path| path.to_string()).collect()
-}
-
 /// A database checkpoint with no env pairs and an empty
 /// memory document, the shape most pins drive.
 fn db_checkpoint(
@@ -172,54 +53,10 @@ fn db_checkpoint(
     checkpoint_with_databases(store, session, state, None, b"", &declare(databases))
 }
 
-fn damage_manifest_json(
-    store: &Path,
-    session: &str,
-    sequence: i64,
-    damage: &dyn Fn(&mut serde_json::Value),
-) {
-    let path = manifest_path(store, session, sequence);
-    let mut value: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    damage(&mut value);
-    std::fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
-}
-
-fn damage_manifest_text(
-    store: &Path,
-    session: &str,
-    sequence: i64,
-    damage: &dyn Fn(&str) -> String,
-) {
-    let path = manifest_path(store, session, sequence);
-    let text = std::fs::read_to_string(&path).unwrap();
-    std::fs::write(&path, damage(&text)).unwrap();
-}
-
 fn flip_first_byte(path: &Path) {
     let mut bytes = std::fs::read(path).unwrap();
     bytes[0] ^= 0xff;
     std::fs::write(path, &bytes).unwrap();
-}
-
-struct CliOutput {
-    status: i32,
-    stdout: String,
-    stderr: String,
-}
-
-fn run_cli(store: &Path, args: &[&str]) -> CliOutput {
-    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
-        .arg("--store")
-        .arg(store)
-        .args(args)
-        .output()
-        .unwrap();
-    CliOutput {
-        status: output.status.code().unwrap_or(-1),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-    }
 }
 
 // WS-11, the declaration.
@@ -1633,6 +1470,61 @@ fn verify_of_a_missing_checkpoint_is_not_found() {
     assert!(matches!(error, Error::NotFound(_)), "{error:?}");
 }
 
+// WS-17's other half: with more than one payload damaged, the
+// refusal names the FIRST in the reading order, the recorded
+// files, then the bundle's members, then the memory document.
+// A file and a member damaged together draw the file's name.
+// The member and memory shape is staged with a memory document
+// in place, where the damage battery's own stores carry an
+// empty one that no byte flip can damage.
+#[test]
+fn verify_names_the_first_damaged_payload_in_reading_order() {
+    let (_base, store) = damaged_v2_store("verify-first-file");
+    flip_first_byte(&checkpoint_dir(&store, "alpha", 1).join("files/data/app.db-wal"));
+    flip_first_byte(&checkpoint_dir(&store, "alpha", 1).join("files/notes.txt"));
+    let error = expect_error(verify_checkpoint(&store, "alpha", 1));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(error.message().contains("notes.txt"), "{}", error.message());
+    assert!(
+        !error.message().contains("app.db-wal"),
+        "{}",
+        error.message()
+    );
+
+    let base = temp_dir("verify-first-member");
+    let store = base.join("store");
+    let state = make_state(
+        &base.join("state"),
+        &[
+            ("data/app.db", b"damage main"),
+            ("data/app.db-wal", b"damage wal"),
+        ],
+    );
+    checkpoint_with_databases(
+        &store,
+        "alpha",
+        &state,
+        None,
+        b"memory-bytes",
+        &declare(&["data/app.db"]),
+    )
+    .unwrap();
+    flip_first_byte(&checkpoint_dir(&store, "alpha", 1).join("memory.bin"));
+    flip_first_byte(&checkpoint_dir(&store, "alpha", 1).join("files/data/app.db"));
+    let error = expect_error(verify_checkpoint(&store, "alpha", 1));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error.message().contains("data/app.db"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        !error.message().contains("memory document"),
+        "{}",
+        error.message()
+    );
+}
+
 // WS-18, compare.
 
 #[test]
@@ -1729,6 +1621,40 @@ fn compare_answers_from_the_record_with_damaged_payloads() {
 }
 
 #[test]
+fn an_edited_bundle_digest_verifies_clean_and_compares_different() {
+    // The bound WS-23 states, pinned: verify never recomputes
+    // the recorded bundle digest, so an edited bundle_sha256
+    // is taken as the record, while compare answers from the
+    // recorded digests alone (WS-A29).
+    let base = temp_dir("compare-edited-digest");
+    let store = base.join("store");
+    let state = make_state(
+        &base.join("state"),
+        &[("app.db", b"bundle main"), ("app.db-wal", b"bundle wal")],
+    );
+    db_checkpoint(&store, "alpha", &state, &["app.db"]).unwrap();
+    db_checkpoint(&store, "alpha", &state, &["app.db"]).unwrap();
+    let edited = sha256_hex(b"a bundle that stands nowhere on disk");
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["databases"][0]["bundle_sha256"] = serde_json::json!(edited.clone());
+    });
+    // The edited record reads back as the record, and verify
+    // returns it clean, its payload untouched and its digest
+    // taken as recorded.
+    let shown = show(&store, "alpha", 1).unwrap();
+    assert_eq!(shown.databases[0].bundle_sha256, edited);
+    let verified = verify_checkpoint(&store, "alpha", 1).unwrap();
+    assert_eq!(verified.databases[0].bundle_sha256, edited);
+    // Compare judges the pair by the recorded digests, so the
+    // two records of one bundle stand Different.
+    let comparison = compare_checkpoints(&store, "alpha", 1, 2).unwrap();
+    assert_eq!(
+        comparison.databases[0].standing,
+        DatabaseStanding::Different
+    );
+}
+
+#[test]
 fn compare_reports_each_database_path_in_order() {
     let base = temp_dir("compare-paths");
     let store = base.join("store");
@@ -1755,6 +1681,66 @@ fn compare_reports_each_database_path_in_order() {
             ("a.db", &DatabaseStanding::Equal),
             ("b.db", &DatabaseStanding::Different)
         ]
+    );
+}
+
+// WS-A69: compare's missing checkpoint refusal. Compare
+// loads the first manifest and then the second, so a
+// missing checkpoint draws load_manifest's NotFound refusal
+// naming that checkpoint, and when both are missing the
+// refusal names the first. The pins below stage a session
+// holding checkpoint 1 alone. The both missing pin answers
+// the plausible wrong form of a swap of the two load lines,
+// which would name 8 where the standing order names 9, and
+// the one side pins hold the refusal's class and text
+// against a compare reworked to judge presence before
+// loading, which would change the refusal's class or text.
+
+#[test]
+fn compare_with_a_missing_second_checkpoint_is_not_found() {
+    let base = temp_dir("compare-missing-second");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("app.db", b"main")]);
+    db_checkpoint(&store, "alpha", &state, &["app.db"]).unwrap();
+    let error = expect_error(compare_checkpoints(&store, "alpha", 1, 9));
+    assert!(matches!(error, Error::NotFound(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("session alpha holds no checkpoint 9 in the store at"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn compare_with_a_missing_first_checkpoint_is_not_found() {
+    let base = temp_dir("compare-missing-first");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("app.db", b"main")]);
+    db_checkpoint(&store, "alpha", &state, &["app.db"]).unwrap();
+    let error = expect_error(compare_checkpoints(&store, "alpha", 9, 1));
+    assert!(matches!(error, Error::NotFound(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("session alpha holds no checkpoint 9 in the store at"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn compare_with_both_checkpoints_missing_names_the_first() {
+    let base = temp_dir("compare-missing-both");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("app.db", b"main")]);
+    db_checkpoint(&store, "alpha", &state, &["app.db"]).unwrap();
+    let error = expect_error(compare_checkpoints(&store, "alpha", 9, 8));
+    assert!(matches!(error, Error::NotFound(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("session alpha holds no checkpoint 9 in the store at"),
+        "{error:?}"
     );
 }
 
@@ -1852,6 +1838,13 @@ fn cli_verify_and_compare_lines() {
     assert_eq!(third.status, 0, "{}", third.stderr);
     let different = run_cli(&store, &["compare", "alpha", "2", "3"]);
     assert_eq!(different.stdout, "app.db different\n");
+    // WS-A61: the one sided line naming the first checkpoint,
+    // the one compare line shape no other assertion in this
+    // pin produces, so an interpolation swapped to the second
+    // checkpoint's number fails here.
+    let first_only = run_cli(&store, &["compare", "alpha", "3", "1"]);
+    assert_eq!(first_only.status, 0, "{}", first_only.stderr);
+    assert_eq!(first_only.stdout, "app.db recorded on checkpoint 3 only\n");
     let fourth = run_cli(
         &store,
         &[
@@ -1869,6 +1862,31 @@ fn cli_verify_and_compare_lines() {
     let empty = run_cli(&store, &["compare", "alpha", "1", "1"]);
     assert_eq!(empty.status, 0, "{}", empty.stderr);
     assert_eq!(empty.stdout, "");
+}
+
+// WS-A69: the command line compare against a missing
+// checkpoint draws the library's NotFound refusal at exit
+// 2, naming the missing sequence.
+
+#[test]
+fn cli_compare_against_a_missing_checkpoint_is_refused() {
+    let base = temp_dir("cli-compare-missing");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("app.db", b"cli main")]);
+    let recorded = run_cli(
+        &store,
+        &["checkpoint", "alpha", "--state", state.to_str().unwrap()],
+    );
+    assert_eq!(recorded.status, 0, "{}", recorded.stderr);
+    let missing = run_cli(&store, &["compare", "alpha", "1", "9"]);
+    assert_eq!(missing.status, 2, "{}", missing.stderr);
+    assert!(
+        missing
+            .stderr
+            .contains("session alpha holds no checkpoint 9 in the store at"),
+        "{}",
+        missing.stderr
+    );
 }
 
 #[test]
