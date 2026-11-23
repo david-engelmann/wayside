@@ -267,7 +267,7 @@ fn validate_env(env: &BTreeMap<String, String>) -> Result<()> {
 /// lands in the Float variant and fails every integer check, as
 /// it did under the Python type checks.
 #[derive(Debug, Clone, PartialEq)]
-pub enum StrictValue {
+enum StrictValue {
     Null,
     Bool(bool),
     Int(i128),
@@ -489,6 +489,16 @@ fn object_get<'a>(entries: &'a [(String, StrictValue)], key: &str) -> Option<&'a
     entries.iter().find(|(seen, _)| seen == key).map(|(_, v)| v)
 }
 
+/// Whether an object's pairs carry exactly the named fields
+/// (WS-A39): the pair count equals the field count and every
+/// named field is present. The strict reader refuses a
+/// repeated key as it parses, so count plus presence is
+/// exactness, and no key can stand twice to hide a missing
+/// one behind the count.
+fn has_exact_fields(pairs: &[(String, StrictValue)], keys: &[&str]) -> bool {
+    pairs.len() == keys.len() && keys.iter().all(|key| object_get(pairs, key).is_some())
+}
+
 fn value_repr(value: &StrictValue) -> String {
     match value {
         StrictValue::Str(text) => py_repr(text),
@@ -672,10 +682,7 @@ fn validate_databases(
     for item in items {
         let pairs = match item {
             StrictValue::Object(pairs)
-                if pairs.len() == 3
-                    && object_get(pairs, "path").is_some()
-                    && object_get(pairs, "bundle_sha256").is_some()
-                    && object_get(pairs, "members").is_some() =>
+                if has_exact_fields(pairs, &["path", "bundle_sha256", "members"]) =>
             {
                 pairs
             }
@@ -714,10 +721,7 @@ fn validate_databases(
         for member in member_values.iter() {
             let member_pairs = match member {
                 StrictValue::Object(pairs)
-                    if pairs.len() == 3
-                        && object_get(pairs, "path").is_some()
-                        && object_get(pairs, "sha256").is_some()
-                        && object_get(pairs, "size").is_some() =>
+                    if has_exact_fields(pairs, &["path", "sha256", "size"]) =>
                 {
                     pairs
                 }
@@ -842,12 +846,33 @@ fn validate_directories(
             "the directory entries are not in path order or repeat a path",
         ));
     }
-    let member_paths: Vec<&str> = databases
+    // The files list stands in path order here, refused
+    // otherwise by validate_manifest before this call, and
+    // the member paths are sorted once here, so each
+    // judgement below is decided by the first path at or
+    // after the directory or its prefix: if that path is
+    // not the directory and does not carry the prefix, no
+    // later path does (WS-A36). The standing form scanned
+    // both lists for every directory.
+    let mut member_paths: Vec<&str> = databases
         .iter()
         .flat_map(|database| database.members.iter().map(|member| member.path.as_str()))
         .collect();
+    // The stands below judgements are decided by a
+    // directory's ancestors, its prefixes cut at the slash
+    // boundaries: a recorded path stands above the directory
+    // exactly when it equals one of them. The file list
+    // stands in path order here, refused otherwise by
+    // validate_manifest before this call, so each ancestor
+    // is answered by binary search, and the member paths
+    // stand in bundle order, so they are gathered once here
+    // into a set of the same slices (WS-A65). The standing
+    // form scanned both lists for every directory and built
+    // a candidate prefix string for each pair it tested.
+    let member_path_set: BTreeSet<&str> = member_paths.iter().copied().collect();
+    member_paths.sort_unstable();
     for directory in &directories {
-        if file_paths.iter().any(|file| file == directory) {
+        if file_paths.binary_search(directory).is_ok() {
             return Err(corrupt(
                 path,
                 &format!(
@@ -856,7 +881,7 @@ fn validate_directories(
                 ),
             ));
         }
-        if member_paths.iter().any(|member| member == directory) {
+        if member_paths.binary_search(&directory.as_str()).is_ok() {
             return Err(corrupt(
                 path,
                 &format!(
@@ -866,33 +891,39 @@ fn validate_directories(
             ));
         }
         let prefix = format!("{directory}/");
-        if file_paths.iter().any(|file| file.starts_with(&prefix)) {
+        let first_file = file_paths.partition_point(|file| file.as_str() < prefix.as_str());
+        if file_paths
+            .get(first_file)
+            .is_some_and(|file| file.starts_with(prefix.as_str()))
+        {
             return Err(corrupt(
                 path,
                 &format!("the directory {directory} stands above a recorded file"),
             ));
         }
+        let first_member = member_paths.partition_point(|member| *member < prefix.as_str());
         if member_paths
-            .iter()
-            .any(|member| member.starts_with(&prefix))
+            .get(first_member)
+            .is_some_and(|member| member.starts_with(prefix.as_str()))
         {
             return Err(corrupt(
                 path,
                 &format!("the directory {directory} stands above a database member"),
             ));
         }
-        if file_paths
-            .iter()
-            .any(|file| directory.starts_with(&format!("{file}/")))
-        {
+        if directory.match_indices('/').any(|(index, _)| {
+            file_paths
+                .binary_search_by(|file| file.as_str().cmp(&directory[..index]))
+                .is_ok()
+        }) {
             return Err(corrupt(
                 path,
                 &format!("the directory {directory} stands below a recorded file"),
             ));
         }
-        if member_paths
-            .iter()
-            .any(|member| directory.starts_with(&format!("{member}/")))
+        if directory
+            .match_indices('/')
+            .any(|(index, _)| member_path_set.contains(&directory[..index]))
         {
             return Err(corrupt(
                 path,
@@ -984,11 +1015,7 @@ fn validate_manifest(
         })
         .collect();
     let memory = match object_get(entries, "memory") {
-        Some(StrictValue::Object(pairs))
-            if pairs.len() == 2
-                && object_get(pairs, "sha256").is_some()
-                && object_get(pairs, "size").is_some() =>
-        {
+        Some(StrictValue::Object(pairs)) if has_exact_fields(pairs, &["sha256", "size"]) => {
             MemoryEntry {
                 sha256: validate_hash(object_get(pairs, "sha256").unwrap(), path, "memory entry")?,
                 size: validate_size(object_get(pairs, "size").unwrap(), path, "memory entry")?,
@@ -1009,12 +1036,7 @@ fn validate_manifest(
     let mut seen: Vec<String> = Vec::new();
     for entry in file_values {
         let pair = match entry {
-            StrictValue::Object(pairs)
-                if pairs.len() == 3
-                    && object_get(pairs, "path").is_some()
-                    && object_get(pairs, "sha256").is_some()
-                    && object_get(pairs, "size").is_some() =>
-            {
+            StrictValue::Object(pairs) if has_exact_fields(pairs, &["path", "sha256", "size"]) => {
                 pairs
             }
             _ => {
@@ -1065,13 +1087,9 @@ fn validate_manifest(
     };
     let forked_from = match object_get(entries, "forked_from") {
         None => None,
-        Some(StrictValue::Object(pairs))
-            if pairs.len() == 2
-                && object_get(pairs, "session").is_some()
-                && object_get(pairs, "sequence").is_some() =>
-        {
+        Some(StrictValue::Object(pairs)) if has_exact_fields(pairs, &["session", "sequence"]) => {
             let fork_session = match object_get(pairs, "session") {
-                Some(StrictValue::Str(text)) => text.clone(),
+                Some(StrictValue::Str(text)) if validate_session_id(text).is_ok() => text.clone(),
                 _ => {
                     return Err(corrupt(
                         path,
@@ -1079,12 +1097,6 @@ fn validate_manifest(
                     ))
                 }
             };
-            if validate_session_id(&fork_session).is_err() {
-                return Err(corrupt(
-                    path,
-                    "the forked_from session is not a safe session id",
-                ));
-            }
             let fork_sequence = match object_get(pairs, "sequence") {
                 Some(StrictValue::Int(number)) if *number >= 1 => *number,
                 _ => {
@@ -1300,6 +1312,20 @@ fn render_field(key: &str, render: impl FnOnce(&mut String)) -> String {
     field
 }
 
+/// The format a manifest's content names (WS-A72): /1 when
+/// both conditional lists stand empty, /2 when either
+/// stands. The derivation stands stated once here, where
+/// new_manifest and render_manifest once each stated it
+/// under WS-A14's discipline, so a change to the rule is
+/// taken up at this one seat or not at all.
+fn manifest_format(databases: &[DatabaseEntry], directories: &[String]) -> &'static str {
+    if databases.is_empty() && directories.is_empty() {
+        FORMAT_NAME
+    } else {
+        FORMAT_V2
+    }
+}
+
 /// Render a manifest exactly as the Python implementation's
 /// sorted, two space indented json rendering renders it, with
 /// no trailing newline. The stored manifest file carries this
@@ -1321,11 +1347,7 @@ pub fn render_manifest(manifest: &Manifest) -> String {
     // its list is non empty, so a hand built value renders
     // the content it carries under the format that content
     // names, and no field it carries is dropped.
-    let effective_format = if manifest.databases.is_empty() && manifest.directories.is_empty() {
-        FORMAT_NAME
-    } else {
-        FORMAT_V2
-    };
+    let effective_format = manifest_format(&manifest.databases, &manifest.directories);
     let mut out = String::new();
     out.push_str("{\n");
     let mut fields: Vec<String> = Vec::new();
@@ -1555,9 +1577,12 @@ fn is_sequence_dir_name(name: &str) -> bool {
 /// even though every read of it is refused by the link checks,
 /// and a residue directory under a temporary name never counts.
 /// A digit name counts only when it is the canonical rendering
-/// of its value, the name sequence_name writes, so an alias
-/// spelling with extra leading zeros names no published
-/// checkpoint and is passed over like any other residue.
+/// of its value, the name sequence_name writes, and only when
+/// that value is one a writer assigns, which is any value from
+/// 1 upward, so an alias spelling with extra leading zeros
+/// names no published checkpoint, and neither does the
+/// canonical spelling of zero, and both are passed over like
+/// any other residue (WS-A56).
 fn published_sequences(root: &Path, session: &str) -> Vec<i64> {
     let ck_dir = checkpoints_dir(root, session);
     let entries = match fs::read_dir(&ck_dir) {
@@ -1569,7 +1594,7 @@ fn published_sequences(root: &Path, session: &str) -> Vec<i64> {
         let name = entry.file_name().to_string_lossy().into_owned();
         if is_sequence_dir_name(&name) && entry.path().is_dir() {
             if let Ok(sequence) = name.parse::<i64>() {
-                if name == sequence_name(sequence) {
+                if sequence >= 1 && name == sequence_name(sequence) {
                     sequences.push(sequence);
                 }
             }
@@ -1642,6 +1667,43 @@ fn load_manifest(root: &Path, session: &str, sequence: i64) -> Result<Manifest> 
     validate_manifest(&data, &path, session, sequence)
 }
 
+/// Read one recorded byte string from its path inside a
+/// checkpoint and check it against its recorded hash and
+/// size. The subject phrase names the byte string in the
+/// refusal tails: the payload for a recorded path, or the
+/// memory document.
+fn read_recorded(
+    path: &Path,
+    session: &str,
+    sequence: i64,
+    subject: &str,
+    sha256: &str,
+    size: i128,
+) -> Result<Vec<u8>> {
+    if !path.is_file() {
+        return Err(corrupt_checkpoint(
+            session,
+            sequence,
+            &format!("{subject} is missing or is not a regular file"),
+        ));
+    }
+    let data = fs::read(path).map_err(|exc| {
+        corrupt_checkpoint(
+            session,
+            sequence,
+            &format!("{subject} cannot be read, {exc}"),
+        )
+    })?;
+    if data.len() as i128 != size || sha256_hex(&data) != sha256 {
+        return Err(corrupt_checkpoint(
+            session,
+            sequence,
+            &format!("{subject} does not match its recorded hash and size"),
+        ));
+    }
+    Ok(data)
+}
+
 /// Read one payload of a checkpoint from its files area and
 /// check it against its recorded hash and size.
 fn read_payload(
@@ -1652,29 +1714,14 @@ fn read_payload(
     sha256: &str,
     size: i128,
 ) -> Result<Vec<u8>> {
-    let payload = join_rel(&ck.join(FILES_NAME), rel);
-    if !payload.is_file() {
-        return Err(corrupt_checkpoint(
-            session,
-            sequence,
-            &format!("the payload for {rel} is missing"),
-        ));
-    }
-    let data = fs::read(&payload).map_err(|exc| {
-        corrupt_checkpoint(
-            session,
-            sequence,
-            &format!("the payload for {rel} cannot be read, {exc}"),
-        )
-    })?;
-    if data.len() as i128 != size || sha256_hex(&data) != sha256 {
-        return Err(corrupt_checkpoint(
-            session,
-            sequence,
-            &format!("the payload for {rel} does not match its recorded hash and size"),
-        ));
-    }
-    Ok(data)
+    read_recorded(
+        &join_rel(&ck.join(FILES_NAME), rel),
+        session,
+        sequence,
+        &format!("the payload for {rel}"),
+        sha256,
+        size,
+    )
 }
 
 /// Read every payload of a checkpoint and check it against the
@@ -1716,29 +1763,14 @@ fn read_verified(
             entries.push((member.path.clone(), data));
         }
     }
-    let memory_path = ck.join(MEMORY_NAME);
-    if !memory_path.is_file() {
-        return Err(corrupt_checkpoint(
-            session,
-            sequence,
-            "the memory document is missing",
-        ));
-    }
-    let memory = fs::read(&memory_path).map_err(|exc| {
-        corrupt_checkpoint(
-            session,
-            sequence,
-            &format!("the memory document cannot be read, {exc}"),
-        )
-    })?;
-    if memory.len() as i128 != manifest.memory.size || sha256_hex(&memory) != manifest.memory.sha256
-    {
-        return Err(corrupt_checkpoint(
-            session,
-            sequence,
-            "the memory document does not match its recorded hash and size",
-        ));
-    }
+    let memory = read_recorded(
+        &ck.join(MEMORY_NAME),
+        session,
+        sequence,
+        "the memory document",
+        &manifest.memory.sha256,
+        manifest.memory.size,
+    )?;
     Ok((entries, memory))
 }
 
@@ -1979,7 +2011,10 @@ impl Default for StateTreeReader {
 /// sorted by path, beside the files. Symbolic links and non
 /// regular files are refused, because a link can name bytes
 /// outside the state directory and a checkpoint records only
-/// what the caller can see in the tree itself. A directory
+/// what the caller can see in the tree itself. An entry whose
+/// name is not valid UTF-8 is refused too, because the record
+/// carries names as text, and a name the record cannot carry
+/// exactly it does not carry at all (WS-A27). A directory
 /// that cannot be listed fails the read, naming that
 /// directory, instead of publishing a partial tree as if it
 /// were complete.
@@ -2008,6 +2043,22 @@ fn read_state_dir(
     let mut dirs: Vec<PathBuf> = Vec::new();
     let mut files: Vec<PathBuf> = Vec::new();
     for path in listed {
+        // A name that is not valid UTF-8 cannot be recorded:
+        // rel_of renders it lossily, so it would stand in the
+        // record under a mangled rendering and be restored
+        // under that rendering, silently, and two names
+        // mangling to one rendering would publish a manifest
+        // repeating a path, which every later read refuses as
+        // corrupt (WS-A27). Refuse the entry here, in the
+        // family of the link and non regular file refusals
+        // below.
+        if path.file_name().is_some_and(|name| name.to_str().is_none()) {
+            return Err(Error::wayside(format!(
+                "the state directory at {} holds an entry whose name is \
+                 not valid UTF-8 text, which a checkpoint does not record",
+                dir.display()
+            )));
+        }
         if fs::metadata(&path)
             .map(|meta| meta.is_dir())
             .unwrap_or(false)
@@ -2208,11 +2259,7 @@ fn new_manifest(
     forked_from: Option<ForkRef>,
 ) -> Manifest {
     Manifest {
-        format: if databases.is_empty() && directories.is_empty() {
-            FORMAT_NAME.to_string()
-        } else {
-            FORMAT_V2.to_string()
-        },
+        format: manifest_format(&databases, &directories).to_string(),
         session: session.to_string(),
         sequence,
         created_at: now_isoformat(),
@@ -2298,6 +2345,16 @@ fn bound_error(rel: &str) -> Error {
     ))
 }
 
+/// The changed during capture refusal of WS-13 (WS-A42): the
+/// one statement of the text the bundle pass and the two pass
+/// agreement judgement in checkpoint_inner share.
+fn changed_during_capture(rel: &str) -> Error {
+    Error::wayside(format!(
+        "the database at {rel} changed during capture, so the \
+         checkpoint is refused"
+    ))
+}
+
 /// The state directory path a recorded relative path names.
 fn join_rel(base: &Path, rel: &str) -> PathBuf {
     let mut path = base.to_path_buf();
@@ -2335,12 +2392,6 @@ fn read_bundle_pass(
     declared_rel: &str,
     reader: &StateTreeReader,
 ) -> Result<Vec<(String, Vec<u8>)>> {
-    let changed = || {
-        Error::wayside(format!(
-            "the database at {declared_rel} changed during capture, so the \
-             checkpoint is refused"
-        ))
-    };
     let mut members: Vec<(String, Vec<u8>)> = Vec::new();
     let mut total: u128 = 0;
     let names = bundle_names(declared_rel);
@@ -2354,13 +2405,15 @@ fn read_bundle_pass(
             }
             Ok(None) => {
                 if index == 0 {
-                    return Err(changed());
+                    return Err(changed_during_capture(declared_rel));
                 }
                 continue;
             }
-            Err(_) => return Err(changed()),
+            Err(_) => return Err(changed_during_capture(declared_rel)),
         }
-        let data = reader.read_bytes(&member_path).map_err(|_| changed())?;
+        let data = reader
+            .read_bytes(&member_path)
+            .map_err(|_| changed_during_capture(declared_rel))?;
         total += data.len() as u128;
         if total > BUNDLE_BOUND as u128 {
             return Err(bound_error(declared_rel));
@@ -2430,10 +2483,11 @@ pub fn checkpoint_with_reader(
 /// Record a new checkpoint declaring database bundles
 /// (WS-11). Each declared path names a file inside the state
 /// directory whose bundle is captured under the consistency
-/// proof of WS-13, and the checkpoint is recorded in
-/// wayside-checkpoint/2. With no declaration the result is a
-/// wayside-checkpoint/1 checkpoint, byte for byte as the
-/// landed checkpoint writes it.
+/// proof of WS-13. The checkpoint is recorded in
+/// wayside-checkpoint/2 when it declares a database or records
+/// an empty directory, and in wayside-checkpoint/1 otherwise
+/// (WS-21). With no declaration the call writes byte for byte
+/// what the landed checkpoint writes.
 pub fn checkpoint_with_databases(
     store: &Path,
     session: &str,
@@ -2541,10 +2595,7 @@ fn checkpoint_inner(
         let second = read_bundle_pass(state_dir, rel, reader)?;
         let first_hashes: Vec<String> = first.iter().map(|(_, data)| sha256_hex(data)).collect();
         if !readings_agree(&first, &first_hashes, &second) {
-            return Err(Error::wayside(format!(
-                "the database at {rel} changed during capture, so the \
-                 checkpoint is refused"
-            )));
+            return Err(changed_during_capture(rel));
         }
         bundles.push((rel.clone(), first, first_hashes));
     }
@@ -2564,13 +2615,28 @@ fn checkpoint_inner(
     // below it, and the recorded payloads are the file entries
     // of the manifest and the members of its bundles, so the
     // judgement runs on the payload set and the member set,
-    // with the -shm companions already out of both.
+    // with the -shm companions already out of both. The
+    // payload set stands in path order here, the walked
+    // entries sorted and the filter above preserving their
+    // order, and the member set is a BTreeSet, so each
+    // judgement is decided by the first payload at or after
+    // the directory's prefix and the first member at or
+    // after it: if neither carries the prefix, no later one
+    // does (WS-A36). The standing form scanned both sets
+    // for every directory.
     let recorded_directories: Vec<String> = walked_directories
         .iter()
         .filter(|directory| {
             let prefix = format!("{directory}/");
-            !payloads.iter().any(|(rel, _)| rel.starts_with(&prefix))
-                && !member_paths.iter().any(|rel| rel.starts_with(&prefix))
+            let first_payload = payloads.partition_point(|(rel, _)| rel.as_str() < prefix.as_str());
+            let payload_below = payloads
+                .get(first_payload)
+                .is_some_and(|(rel, _)| rel.starts_with(prefix.as_str()));
+            let member_below = member_paths
+                .range(prefix.clone()..)
+                .next()
+                .is_some_and(|rel| rel.starts_with(prefix.as_str()));
+            !payload_below && !member_below
         })
         .cloned()
         .collect();
