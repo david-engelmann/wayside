@@ -1,10 +1,12 @@
 # Wayside port fixtures, recorded truth
 
 These fixtures are the cross implementation equivalence proof for the
-wayside Rust port. Every store tree here was written by the Python
-implementation of wayside at main (merge
+wayside Rust port. The store trees of fixtures 1 to 5 were written by
+the Python implementation of wayside at main (merge
 537a74f3340356a62d297285adffecb341de8d52), extracted fresh into a
-scratch checkout, and frozen byte for byte. All content is synthetic
+scratch checkout, and frozen byte for byte. The stores of fixtures 6
+and 7 were written by this repo's own Rust command line, as their
+sections below record. All content is synthetic
 and was written for these fixtures.
 
 How each fixture was made. During the port preparation, outside this
@@ -582,7 +584,8 @@ is synthetic.
 
 Production calls. The producer drove the slice's command line over
 three state trees, each holding plan.txt with the bytes "first
-plan", with the memory document "memory one" and the env pair
+plan" and a trailing newline, with the memory document "memory
+one" carrying a trailing newline of its own and the env pair
 MODE=one declared on every call.
 
     wayside --store <store> checkpoint alpha --state <state>
