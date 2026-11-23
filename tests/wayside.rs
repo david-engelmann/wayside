@@ -2446,6 +2446,63 @@ fn checkpoint_fails_when_the_state_directory_cannot_be_listed() {
     assert!(!checkpoint_dir(&store, "alpha", 1).exists());
 }
 
+/// WS-A27: a state tree holding a name that is not valid
+/// UTF-8 is refused at the walk. On the code this pin was
+/// written against, the name was recorded under its lossy
+/// rendering and restored under that rendering, silently.
+#[cfg(unix)]
+#[test]
+fn checkpoint_refuses_a_state_file_whose_name_is_not_valid_utf8() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let base = temp_dir("walk-non-utf8-file");
+    let store = base.join("store");
+    let state = base.join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(state.join("plain.txt"), b"plain").unwrap();
+    let bad = std::ffi::OsString::from_vec(b"bad-\xff.txt".to_vec());
+    std::fs::write(state.join(bad), b"bad bytes").unwrap();
+    let error = expect_error(checkpoint(&store, "alpha", &state, None, b""));
+    assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert!(
+        error.message().contains("not valid UTF-8"),
+        "{}",
+        error.message()
+    );
+    assert!(!checkpoint_dir(&store, "alpha", 1).exists());
+    // The refusal consumed no sequence: the next clean
+    // checkpoint of the session takes sequence 1.
+    let clean = make_state(&base.join("clean"), &[("a.txt", b"a")]);
+    let manifest = checkpoint(&store, "alpha", &clean, None, b"").unwrap();
+    assert_eq!(manifest.sequence, 1);
+}
+
+/// WS-A27: the directory shape of the same refusal. On the
+/// code this pin was written against, the directory's name
+/// was recorded under its lossy rendering and its payload
+/// restored under that rendering.
+#[cfg(unix)]
+#[test]
+fn checkpoint_refuses_a_state_directory_whose_name_is_not_valid_utf8() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let base = temp_dir("walk-non-utf8-dir");
+    let store = base.join("store");
+    let state = base.join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    let dir = state.join(std::ffi::OsString::from_vec(b"bad-\xfe".to_vec()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("inner.txt"), b"inner").unwrap();
+    let error = expect_error(checkpoint(&store, "alpha", &state, None, b""));
+    assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert!(
+        error.message().contains("not valid UTF-8"),
+        "{}",
+        error.message()
+    );
+    assert!(!checkpoint_dir(&store, "alpha", 1).exists());
+}
+
 #[test]
 fn cli_memory_symlink_is_refused_with_its_own_message() {
     let base = temp_dir("cli-memory-link");
