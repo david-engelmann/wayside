@@ -2260,6 +2260,50 @@ fn cli_help_fails_when_its_output_cannot_be_written() {
     );
 }
 
+// WS-A68: the bare short help form. The pins above drive the
+// long form alone and WS-A63's pins drive the equals forms
+// of the long name, but the bare -h travels its own equality
+// arm at each parser level, distinct from the resolve_long
+// path the long form takes: dispatch's arm at the top level
+// and parse_sub's arm inside a subcommand. Each pin below
+// answers the plausible wrong form of a repair at its own
+// level, the short form dropped from that level's help arm,
+// which would send the token to that level's extras
+// collection and draw the unrecognized arguments refusal at
+// exit 2 with no help text on stdout.
+
+#[test]
+fn cli_short_help_prints_the_usage_and_exits_zero_at_the_top_level() {
+    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
+        .arg("-h")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert_eq!(output.status.code().unwrap_or(-1), 0, "{stdout}");
+    assert!(
+        stdout.starts_with("usage: wayside [-h] --store STORE"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("record a new checkpoint of a session"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn cli_short_help_prints_the_usage_and_exits_zero_in_a_subcommand() {
+    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
+        .args(["checkpoint", "-h"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert_eq!(output.status.code().unwrap_or(-1), 0, "{stdout}");
+    assert!(
+        stdout.contains("usage: wayside checkpoint [-h] --state STATE"),
+        "{stdout}"
+    );
+}
+
 // WS-A54: the fork and rewind arms of the command line, driven
 // end to end. The library's fork and rewind stand pinned at the
 // library surface; these pins hold the arms' own work, the
