@@ -128,6 +128,29 @@ def test_refusals_raise_with_the_command_line_messages(tmp_path):
         wayside.show(store, "alpha", 1)
 
 
+def test_restore_refuses_a_blocked_target_as_target_error(tmp_path):
+    store = str(tmp_path / "store")
+    state = tmp_path / "state"
+    write_state(state, "first plan")
+    wayside.checkpoint(store, "alpha", str(state))
+
+    occupied = tmp_path / "occupied"
+    occupied.mkdir()
+    (occupied / "plan.txt").write_text("someone else's work")
+    with pytest.raises(wayside.TargetError) as not_empty:
+        wayside.restore(store, "alpha", 1, str(occupied))
+    assert "is not empty" in str(not_empty.value)
+    assert (occupied / "plan.txt").read_text() == "someone else's work"
+    assert not (occupied / "work").exists()
+
+    standing = tmp_path / "standing-file"
+    standing.write_text("a file, not a directory")
+    with pytest.raises(wayside.TargetError) as not_a_directory:
+        wayside.restore(store, "alpha", 1, str(standing))
+    assert "exists and is not a directory" in str(not_a_directory.value)
+    assert standing.read_text() == "a file, not a directory"
+
+
 def test_the_database_lifecycle_through_the_binding(tmp_path):
     import hashlib
 
@@ -184,6 +207,13 @@ def test_the_database_lifecycle_through_the_binding(tmp_path):
     one_side = wayside.compare(store, "alpha", 4, 3)
     assert one_side["databases"] == [
         {"path": "data/app.db", "standing": "only_second"}
+    ]
+
+    # WS-A61: the reverse comparison, the only_first word for
+    # the same staging.
+    other_side = wayside.compare(store, "alpha", 3, 4)
+    assert other_side["databases"] == [
+        {"path": "data/app.db", "standing": "only_first"}
     ]
 
     target = tmp_path / "restored"
