@@ -489,6 +489,16 @@ fn object_get<'a>(entries: &'a [(String, StrictValue)], key: &str) -> Option<&'a
     entries.iter().find(|(seen, _)| seen == key).map(|(_, v)| v)
 }
 
+/// Whether an object's pairs carry exactly the named fields
+/// (WS-A39): the pair count equals the field count and every
+/// named field is present. The strict reader refuses a
+/// repeated key as it parses, so count plus presence is
+/// exactness, and no key can stand twice to hide a missing
+/// one behind the count.
+fn has_exact_fields(pairs: &[(String, StrictValue)], keys: &[&str]) -> bool {
+    pairs.len() == keys.len() && keys.iter().all(|key| object_get(pairs, key).is_some())
+}
+
 fn value_repr(value: &StrictValue) -> String {
     match value {
         StrictValue::Str(text) => py_repr(text),
@@ -672,10 +682,7 @@ fn validate_databases(
     for item in items {
         let pairs = match item {
             StrictValue::Object(pairs)
-                if pairs.len() == 3
-                    && object_get(pairs, "path").is_some()
-                    && object_get(pairs, "bundle_sha256").is_some()
-                    && object_get(pairs, "members").is_some() =>
+                if has_exact_fields(pairs, &["path", "bundle_sha256", "members"]) =>
             {
                 pairs
             }
@@ -714,10 +721,7 @@ fn validate_databases(
         for member in member_values.iter() {
             let member_pairs = match member {
                 StrictValue::Object(pairs)
-                    if pairs.len() == 3
-                        && object_get(pairs, "path").is_some()
-                        && object_get(pairs, "sha256").is_some()
-                        && object_get(pairs, "size").is_some() =>
+                    if has_exact_fields(pairs, &["path", "sha256", "size"]) =>
                 {
                     pairs
                 }
@@ -1011,11 +1015,7 @@ fn validate_manifest(
         })
         .collect();
     let memory = match object_get(entries, "memory") {
-        Some(StrictValue::Object(pairs))
-            if pairs.len() == 2
-                && object_get(pairs, "sha256").is_some()
-                && object_get(pairs, "size").is_some() =>
-        {
+        Some(StrictValue::Object(pairs)) if has_exact_fields(pairs, &["sha256", "size"]) => {
             MemoryEntry {
                 sha256: validate_hash(object_get(pairs, "sha256").unwrap(), path, "memory entry")?,
                 size: validate_size(object_get(pairs, "size").unwrap(), path, "memory entry")?,
@@ -1036,12 +1036,7 @@ fn validate_manifest(
     let mut seen: Vec<String> = Vec::new();
     for entry in file_values {
         let pair = match entry {
-            StrictValue::Object(pairs)
-                if pairs.len() == 3
-                    && object_get(pairs, "path").is_some()
-                    && object_get(pairs, "sha256").is_some()
-                    && object_get(pairs, "size").is_some() =>
-            {
+            StrictValue::Object(pairs) if has_exact_fields(pairs, &["path", "sha256", "size"]) => {
                 pairs
             }
             _ => {
@@ -1092,11 +1087,7 @@ fn validate_manifest(
     };
     let forked_from = match object_get(entries, "forked_from") {
         None => None,
-        Some(StrictValue::Object(pairs))
-            if pairs.len() == 2
-                && object_get(pairs, "session").is_some()
-                && object_get(pairs, "sequence").is_some() =>
-        {
+        Some(StrictValue::Object(pairs)) if has_exact_fields(pairs, &["session", "sequence"]) => {
             let fork_session = match object_get(pairs, "session") {
                 Some(StrictValue::Str(text)) if validate_session_id(text).is_ok() => text.clone(),
                 _ => {
