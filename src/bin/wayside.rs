@@ -113,6 +113,15 @@ fn parser_error(usage: &'static str, prog: &str, message: String) -> ParserError
     }
 }
 
+impl ParserError {
+    /// Report this failure the way dispatch reports every
+    /// parser failure: the usage and the error line on
+    /// standard error, at exit 2 (WS-A67).
+    fn fail(&self) -> ExitCode {
+        parser_fail(self.usage, &self.prog, &self.message)
+    }
+}
+
 fn is_option_like(token: &str) -> bool {
     if token.len() < 2 || !token.starts_with('-') || token == "-" {
         return false;
@@ -452,8 +461,19 @@ fn dispatch(argv: &[String]) -> Result<ExitCode, Error> {
     let mut command: Option<String> = None;
     let mut rest: Vec<String> = Vec::new();
     let mut extras: Vec<String> = Vec::new();
+    let mut after_separator = false;
     while index < argv.len() {
         let token = &argv[index];
+        if !after_separator && token == "--" {
+            after_separator = true;
+            index += 1;
+            continue;
+        }
+        if after_separator {
+            command = Some(token.clone());
+            rest = argv[index + 1..].to_vec();
+            break;
+        }
         if token == "-h" || token == "--help" {
             print_output(&format!("{MAIN_HELP}\n"))?;
             return Ok(ExitCode::from(0));
@@ -557,9 +577,7 @@ fn dispatch(argv: &[String]) -> Result<ExitCode, Error> {
     };
     let args = match parsed {
         Ok(args) => args,
-        Err(failure) => {
-            return Ok(parser_fail(failure.usage, &failure.prog, &failure.message));
-        }
+        Err(failure) => return Ok(failure.fail()),
     };
     let required = match command.as_str() {
         "checkpoint" => require(&command, &args, &["session"], &["--state"]),
@@ -575,7 +593,7 @@ fn dispatch(argv: &[String]) -> Result<ExitCode, Error> {
         _ => require(&command, &args, &["session", "sequence"], &[]),
     };
     if let Err(failure) = required {
-        return Ok(parser_fail(failure.usage, &failure.prog, &failure.message));
+        return Ok(failure.fail());
     }
     if store.is_none() {
         return Ok(parser_fail(
