@@ -193,6 +193,19 @@ fn parse_sub(
             };
             match resolve_long(name, &candidates) {
                 Ok(Some("--help")) => {
+                    // A help flag carrying an inline value is
+                    // refused, as the reference parser refuses
+                    // it: the flag takes no argument (WS-A63).
+                    if let Some(value) = &inline_value {
+                        return Err(parser_error(
+                            sub_usage(command),
+                            &format!("wayside {command}"),
+                            format!(
+                                "argument -h/--help: ignored explicit argument {}",
+                                wayside::py_repr(value)
+                            ),
+                        ));
+                    }
                     exit_after_print(&format!("{}\n", sub_help(command)));
                 }
                 Ok(Some(option)) => {
@@ -439,8 +452,19 @@ fn dispatch(argv: &[String]) -> Result<ExitCode, Error> {
     let mut command: Option<String> = None;
     let mut rest: Vec<String> = Vec::new();
     let mut extras: Vec<String> = Vec::new();
+    let mut after_separator = false;
     while index < argv.len() {
         let token = &argv[index];
+        if !after_separator && token == "--" {
+            after_separator = true;
+            index += 1;
+            continue;
+        }
+        if after_separator {
+            command = Some(token.clone());
+            rest = argv[index + 1..].to_vec();
+            break;
+        }
         if token == "-h" || token == "--help" {
             print_output(&format!("{MAIN_HELP}\n"))?;
             return Ok(ExitCode::from(0));
@@ -452,6 +476,19 @@ fn dispatch(argv: &[String]) -> Result<ExitCode, Error> {
             };
             match resolve_long(name, &["--store", "--help"]) {
                 Ok(Some("--help")) => {
+                    // A help flag carrying an inline value is
+                    // refused, as the reference parser refuses
+                    // it: the flag takes no argument (WS-A63).
+                    if let Some(value) = &inline_value {
+                        return Ok(parser_fail(
+                            MAIN_USAGE,
+                            "wayside",
+                            &format!(
+                                "argument -h/--help: ignored explicit argument {}",
+                                wayside::py_repr(value)
+                            ),
+                        ));
+                    }
                     print_output(&format!("{MAIN_HELP}\n"))?;
                     return Ok(ExitCode::from(0));
                 }
