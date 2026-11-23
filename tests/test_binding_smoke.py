@@ -209,6 +209,13 @@ def test_the_database_lifecycle_through_the_binding(tmp_path):
         {"path": "data/app.db", "standing": "only_second"}
     ]
 
+    # WS-A61: the reverse comparison, the only_first word for
+    # the same staging.
+    other_side = wayside.compare(store, "alpha", 3, 4)
+    assert other_side["databases"] == [
+        {"path": "data/app.db", "standing": "only_first"}
+    ]
+
     target = tmp_path / "restored"
     wayside.restore(store, "alpha", 1, str(target))
     assert (target / "data" / "app.db").read_bytes() == main_bytes
