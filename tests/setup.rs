@@ -575,6 +575,28 @@ fn codepoint_scan_takes_a_root_whose_name_is_not_unicode() {
     assert!(!result.stderr.contains("panicked"), "{}", result.stderr);
 }
 
+// WS-P63: the walk's coverage of a file whose own name is
+// not valid Unicode stands pinned inside the tree. The
+// root pin above stages the non Unicode name at the scan
+// root; this pin stages it on a file entry, the seat a
+// walk that rendered each file's name as text and passed
+// over the names that fail to render would skip, reporting
+// zero at exit 0 where this pin requires the dash counted.
+
+#[cfg(unix)]
+#[test]
+fn codepoint_scan_scans_a_file_whose_name_is_not_unicode() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let dir = temp_dir("non-unicode-file");
+    let name = std::ffi::OsStr::from_bytes(b"bad-\xff-name.md");
+    std::fs::write(dir.join(name), "a\u{2014}b").unwrap();
+    std::fs::write(dir.join("clean.md"), "clean").unwrap();
+    let result = scan_tree(&dir);
+    assert_eq!(result.status, 1);
+    assert!(result.stdout.contains("em dash U+2014 count 1"));
+}
+
 /// WS-A53: an argument past the root is a scan error at
 /// exit 2, refused before any scan. On the code this pin
 /// was written against, the scanner took its root from
