@@ -352,6 +352,7 @@ pub(crate) fn read_verified(
     )?;
     Ok((entries, memory))
 }
+
 /// Check every payload of a checkpoint against the manifest
 /// without holding the payloads: the recorded files, then
 /// every database member, then the memory document, each
