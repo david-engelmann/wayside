@@ -206,6 +206,28 @@ fn checkpoint_refuses_when_the_session_position_is_a_regular_file() {
 }
 
 #[test]
+fn checkpoint_refuses_when_the_store_path_is_a_regular_file() {
+    // WS-P72: the store lock's opened refusal stands pinned at
+    // its own seat. The store path itself standing as a regular
+    // file passes checkpoint's validations and the state walk,
+    // and the lock's creation of the store root is the first
+    // seat that touches the store.
+    let base = temp_dir("store-path-file");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    std::fs::write(&store, b"planted").unwrap();
+    let error = expect_error(checkpoint(&store, "alpha", &state, None, b""));
+    assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert!(
+        error.to_string().contains(&format!(
+            "the store at {} cannot be opened",
+            store.display()
+        )),
+        "{error}"
+    );
+}
+
+#[test]
 fn checkpoint_refuses_a_symlink_in_the_state_tree() {
     let base = temp_dir("state-link");
     let store = base.join("store");
