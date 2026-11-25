@@ -37,8 +37,9 @@ use wayside::{
 mod common;
 
 use common::{
-    checkpoint_dir, copy_tree, damage_manifest_json, damage_manifest_text, expect_error, hash_tree,
-    make_state, manifest_path, run_cli, sha256_hex, tree_bytes, CliOutput, EMPTY_SHA256,
+    checkpoint_dir, copy_tree, damage_manifest_json, damage_manifest_text, expect_error,
+    fixture_root, hash_tree, make_state, manifest_path, run_cli, sha256_hex, tree_bytes, CliOutput,
+    EMPTY_SHA256,
 };
 
 fn temp_dir(tag: &str) -> PathBuf {
@@ -2591,13 +2592,6 @@ fn cli_memory_symlink_is_refused_with_its_own_message() {
 // as the mayfly port reported its drive battery separately.
 // Each fixture store was written by the Python implementation
 // and frozen with its recorded truths under tests/fixtures.
-
-fn fixture_root(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join(name)
-}
 
 fn fixture_case(name: &str, sessions: &[(&str, &[i64])], grow_session: &str, next_sequence: i64) {
     let fixture = fixture_root(name);

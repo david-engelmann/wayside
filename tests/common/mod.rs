@@ -113,6 +113,13 @@ pub fn copy_tree(from: &Path, to: &Path) {
     }
 }
 
+pub fn fixture_root(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join(name)
+}
+
 pub fn hash_tree(root: &Path) -> BTreeMap<String, String> {
     let mut result = BTreeMap::new();
     hash_tree_into(root, root, &mut result);

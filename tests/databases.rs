@@ -24,7 +24,8 @@ mod common;
 
 use common::{
     checkpoint_dir, copy_tree, damage_manifest_json, damage_manifest_text, declare, expect_error,
-    hash_tree, make_state, manifest_path, run_cli, sha256_hex, tree_bytes, EMPTY_SHA256,
+    fixture_root, hash_tree, make_state, manifest_path, run_cli, sha256_hex, tree_bytes,
+    EMPTY_SHA256,
 };
 
 fn temp_dir(tag: &str) -> PathBuf {
@@ -1970,13 +1971,6 @@ fn cli_database_option_accepts_an_unambiguous_prefix() {
 // The frozen /2 store, written by this slice's own command
 // line. The production record stands in MANIFEST.md beside
 // the fixture.
-
-fn fixture_root(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join(name)
-}
 
 #[test]
 fn fixture_database_snapshot() {
