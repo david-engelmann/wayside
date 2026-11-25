@@ -403,10 +403,13 @@ fn read_state_dir(
 /// loop publish and place share, splitting each path on its
 /// separators and pushing the parts onto the root.
 pub(crate) fn write_entries(root: &Path, entries: &[(String, Vec<u8>)]) -> io::Result<()> {
+    let mut created: BTreeSet<PathBuf> = BTreeSet::new();
     for (rel, data) in entries {
         let dest = join_rel(root, rel);
         if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent)?;
+            if created.insert(parent.to_path_buf()) {
+                fs::create_dir_all(parent)?;
+            }
         }
         fs::write(&dest, data)?;
     }
