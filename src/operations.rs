@@ -14,8 +14,8 @@ use crate::model::{
     DatabaseStanding, ForkRef, Manifest,
 };
 use crate::store::{
-    check_session_links, create_checkpoints_dir, load_manifest, locked, now_isoformat,
-    published_sequences, read_verified, require_session, verify_payloads,
+    check_session_links, create_checkpoints_dir, load_manifest, locked, no_checkpoint,
+    now_isoformat, published_sequences, read_verified, require_session, verify_payloads,
 };
 use crate::{BUNDLE_BOUND, ENV_FILE_NAME, ENV_HEADER, MEMORY_FILE_NAME};
 use sha2::{Digest, Sha256};
@@ -377,10 +377,7 @@ pub fn rewind(store: &Path, session: &str, sequence: i64, target: &Path) -> Resu
         )));
     }
     if !sequences.contains(&sequence) {
-        return Err(Error::NotFound(format!(
-            "session {session} holds no checkpoint {sequence} in the store at {}",
-            store.display()
-        )));
+        return Err(no_checkpoint(store, session, sequence));
     }
     restore(store, session, sequence, target)
 }

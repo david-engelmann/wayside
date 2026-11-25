@@ -204,6 +204,16 @@ pub(crate) fn require_session(root: &Path, session: &str) -> Result<()> {
     }
 }
 
+/// The no checkpoint refusal: the one statement of the sentence
+/// every operation answers when a session holds no checkpoint of
+/// the named sequence in this store.
+pub(crate) fn no_checkpoint(root: &Path, session: &str, sequence: i64) -> Error {
+    Error::NotFound(format!(
+        "session {session} holds no checkpoint {sequence} in the store at {}",
+        root.display()
+    ))
+}
+
 /// The corrupt checkpoint refusal (WS-A52): the one statement
 /// of the prefix every refusal that names a checkpoint corrupt
 /// from the payload reading family opens with, the sequence
@@ -230,10 +240,7 @@ pub(crate) fn load_manifest(root: &Path, session: &str, sequence: i64) -> Result
                  so the checkpoint cannot be read",
             ));
         }
-        return Err(Error::NotFound(format!(
-            "session {session} holds no checkpoint {sequence} in the store at {}",
-            root.display()
-        )));
+        return Err(no_checkpoint(root, session, sequence));
     }
     let raw_bytes =
         fs::read(&path).map_err(|exc| corrupt(&path, &format!("it cannot be read, {exc}")))?;
