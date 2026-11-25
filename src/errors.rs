@@ -56,9 +56,9 @@ impl std::error::Error for Error {}
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// The payloads of one verified checkpoint: the file entries
-/// as relative path and bytes pairs in manifest order,
-/// together with the memory document bytes.
+/// The payloads of one verified checkpoint: the recorded files
+/// and every database member as relative path and bytes pairs
+/// in manifest order, together with the memory document bytes.
 pub(crate) type VerifiedPayloads = (Vec<(String, Vec<u8>)>, Vec<u8>);
 
 /// One captured database bundle: the declared path together
