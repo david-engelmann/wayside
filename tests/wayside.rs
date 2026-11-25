@@ -1699,6 +1699,90 @@ fn manifest_with_a_wrong_typed_value_is_refused_created_at_unparseable() {
     });
 }
 
+// The port amendment at CONTRACT.md line 79 records this reader
+// refusing a recorded number wider than an unsigned 64 bit
+// integer at read time (WS-P39). The damage family above feeds
+// wrong typed values through the JSON editor, which cannot carry
+// the wider integer, so these pins feed it through the text
+// editor on the rendered manifest. The staged checkpoint carries
+// a one byte file and an empty memory document, so the memory
+// entry's size stands as the document's only "size": 0 and the
+// file entry's as its only "size": 1.
+
+fn wider_than_u64_case(tag: &str, damage: &dyn Fn(&str) -> String) {
+    let base = temp_dir(tag);
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    damage_manifest_text(&store, "alpha", 1, damage);
+    let error = expect_error(show(&store, "alpha", 1));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+}
+
+#[test]
+fn manifest_with_a_wider_than_u64_memory_size_is_refused() {
+    wider_than_u64_case("wide-memory-size", &|text| {
+        text.replacen("\"size\": 0", "\"size\": 18446744073709551616", 1)
+    });
+}
+
+#[test]
+fn manifest_with_a_wider_than_u64_file_size_is_refused() {
+    wider_than_u64_case("wide-file-size", &|text| {
+        text.replacen("\"size\": 1", "\"size\": 18446744073709551616", 1)
+    });
+}
+
+#[test]
+fn manifest_with_a_u64_max_memory_size_is_taken() {
+    let base = temp_dir("wide-memory-max");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    damage_manifest_text(&store, "alpha", 1, &|text| {
+        text.replacen("\"size\": 0", "\"size\": 18446744073709551615", 1)
+    });
+    let manifest = show(&store, "alpha", 1).unwrap();
+    assert_eq!(manifest.memory.size, 18446744073709551615);
+}
+
+#[test]
+fn manifest_with_a_wider_than_u64_forked_from_sequence_is_refused() {
+    let base = temp_dir("wide-fork-sequence");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    fork(&store, "alpha", 1, "beta").unwrap();
+    damage_manifest_text(&store, "beta", 1, &|text| {
+        text.replacen(
+            "\"sequence\": 1,\n    \"session\": \"alpha\"",
+            "\"sequence\": 18446744073709551616,\n    \"session\": \"alpha\"",
+            1,
+        )
+    });
+    let error = expect_error(show(&store, "beta", 1));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+}
+
+#[test]
+fn manifest_with_a_u64_max_forked_from_sequence_is_taken() {
+    let base = temp_dir("wide-fork-max");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    fork(&store, "alpha", 1, "beta").unwrap();
+    damage_manifest_text(&store, "beta", 1, &|text| {
+        text.replacen(
+            "\"sequence\": 1,\n    \"session\": \"alpha\"",
+            "\"sequence\": 18446744073709551615,\n    \"session\": \"alpha\"",
+            1,
+        )
+    });
+    let manifest = show(&store, "beta", 1).unwrap();
+    let lineage = manifest.forked_from.unwrap();
+    assert_eq!(lineage.sequence, 18446744073709551615);
+}
+
 #[test]
 fn manifest_with_an_uppercase_z_zone_is_accepted() {
     let base = temp_dir("created-zulu");

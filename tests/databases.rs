@@ -1171,6 +1171,19 @@ fn v2_manifest_with_a_repeated_key_is_refused() {
 }
 
 #[test]
+fn v2_manifest_with_a_wider_than_u64_member_size_is_refused() {
+    // WS-P39 at the member seat. The databases entry renders
+    // ahead of the files, and its first member is the database
+    // path itself at twelve bytes, so the document's first
+    // "size": 12 is that member's.
+    let (_base, store) = damaged_v2_store("damage-wide-member-size");
+    damage_manifest_text(&store, "alpha", 1, &|text| {
+        text.replacen("\"size\": 12", "\"size\": 18446744073709551616", 1)
+    });
+    expect_corrupt_show(&store);
+}
+
+#[test]
 fn v2_manifest_with_an_extra_database_field_is_refused() {
     let (_base, store) = damaged_v2_store("damage-extra-field");
     damage_manifest_json(&store, "alpha", 1, &|value| {

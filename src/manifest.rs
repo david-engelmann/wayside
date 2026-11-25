@@ -144,7 +144,7 @@ fn validate_hash(value: &StrictValue, path: &Path, what: &str) -> Result<String>
 
 fn validate_size(value: &StrictValue, path: &Path, what: &str) -> Result<i128> {
     match value {
-        StrictValue::Int(number) if *number >= 0 => Ok(*number),
+        StrictValue::Int(number) if *number >= 0 && *number <= i128::from(u64::MAX) => Ok(*number),
         _ => Err(corrupt(path, &format!("the {what} carries no sound size"))),
     }
 }
@@ -627,7 +627,11 @@ pub(crate) fn validate_manifest(
                 }
             };
             let fork_sequence = match object_get(pairs, "sequence") {
-                Some(StrictValue::Int(number)) if *number >= 1 => *number,
+                Some(StrictValue::Int(number))
+                    if *number >= 1 && *number <= i128::from(u64::MAX) =>
+                {
+                    *number
+                }
                 _ => {
                     return Err(corrupt(
                         path,
