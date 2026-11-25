@@ -193,7 +193,25 @@ fn ci_carries_the_fleet_credential_hygiene() {
     // than a moving branch name.
     assert!(text.contains("permissions:"));
     assert!(text.contains("contents: read"));
-    assert!(text.contains("persist-credentials: false"));
+    // Every checkout step stands judged in its own block, not
+    // by one whole-text presence: the workflow carries two
+    // checkout steps, one per job, and dropping the setting
+    // from either, or flipping either to true while the other
+    // stands, fails this pin (WS-P73).
+    assert!(!text.contains("persist-credentials: true"));
+    let checkout_blocks: Vec<&str> = text.split("- uses: actions/checkout@").skip(1).collect();
+    assert_eq!(
+        checkout_blocks.len(),
+        2,
+        "the workflow carries two checkout steps"
+    );
+    for block in checkout_blocks {
+        let block = block.split("\n      - ").next().unwrap();
+        assert!(
+            block.contains("persist-credentials: false"),
+            "a checkout step does not stand with persist-credentials: false"
+        );
+    }
     assert!(!text.contains("rust-toolchain@master"));
     // Every toolchain step stands judged, not only the first
     // one the file finds: the workflow carries two, one per
