@@ -1235,6 +1235,25 @@ fn v2_manifest_with_a_member_that_is_not_an_appendage_is_refused() {
     expect_corrupt_show(&store);
 }
 
+// WS-P41. The recorded path judgement on the database entry's own
+// path stood unpinned. The members can stand in correct slot order
+// while failing the recorded path rules only when the entry path
+// itself fails them, the bundle slots being built from the
+// recorded path, so this pin renames the entry path and its
+// members together to a parent reference path and its appendages.
+
+#[test]
+fn v2_manifest_with_a_database_path_below_a_parent_reference_is_refused() {
+    let (_base, store) = damaged_v2_store("damage-database-parent");
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["databases"][0]["path"] = serde_json::json!("../app.db");
+        value["databases"][0]["members"][0]["path"] = serde_json::json!("../app.db");
+        value["databases"][0]["members"][1]["path"] = serde_json::json!("../app.db-wal");
+        value["databases"][0]["members"][2]["path"] = serde_json::json!("../app.db-journal");
+    });
+    expect_corrupt_show(&store);
+}
+
 #[test]
 fn v2_manifest_with_a_path_in_files_and_databases_is_refused() {
     let (_base, store) = damaged_v2_store("damage-overlap");
