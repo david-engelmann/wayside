@@ -10,7 +10,7 @@
 //! frozen Python stores of the port as the fixed record a
 //! later reader change must keep reading.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
