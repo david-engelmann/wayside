@@ -586,8 +586,8 @@ pub(crate) fn changed_during_capture(rel: &str) -> Error {
     ))
 }
 
-/// The path a recorded relative path names under a base path, its slash
-/// separated parts pushed onto the base one by one.
+/// The path a recorded relative path names under a base path,
+/// its slash separated parts pushed onto the base one by one.
 pub(crate) fn join_rel(base: &Path, rel: &str) -> PathBuf {
     let mut path = base.to_path_buf();
     for part in rel.split('/') {
