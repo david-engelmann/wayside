@@ -389,6 +389,28 @@ fn codepoint_scan_counts_an_en_dash() {
     assert!(result.stdout.contains("en dash U+2013 count 1"));
 }
 
+// WS-P62: the per file report and the independence of the
+// two tallies stand pinned by the whole output. A scanner
+// whose per file line swapped the two counts, printed the
+// tree's totals in the file's place, or tallied each dash
+// into both counts passes the standing count pins and
+// fails this one.
+
+#[test]
+fn codepoint_scan_reports_each_files_counts_and_the_totals() {
+    let dir = temp_dir("per-file-counts");
+    std::fs::write(dir.join("alpha.md"), "a\u{2014}b\u{2014}c\u{2013}d").unwrap();
+    std::fs::write(dir.join("beta.md"), "x\u{2014}y").unwrap();
+    let result = scan_tree(&dir);
+    assert_eq!(result.status, 1);
+    let expected = format!(
+        "{}: em dash 2, en dash 1\n{}: em dash 1, en dash 0\nem dash U+2014 count 3\nen dash U+2013 count 1\n",
+        dir.join("alpha.md").display(),
+        dir.join("beta.md").display()
+    );
+    assert_eq!(result.stdout, expected);
+}
+
 #[test]
 fn codepoint_scan_scans_a_root_under_an_excluded_ancestor() {
     let dir = temp_dir("excluded-ancestor").join("venv").join("tree");
