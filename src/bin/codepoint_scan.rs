@@ -58,6 +58,12 @@ const EXCLUDED_DIRS: [&str; 9] = [
 
 struct ScanError(String);
 
+impl ScanError {
+    fn cannot_read(path: &Path, err: std::io::Error) -> ScanError {
+        ScanError(format!("cannot read {}, {err}", path.display()))
+    }
+}
+
 fn has_binary_suffix(path: &Path) -> bool {
     match path.extension().and_then(|ext| ext.to_str()) {
         Some(ext) => BINARY_SUFFIXES.contains(&ext.to_lowercase().as_str()),
@@ -68,15 +74,13 @@ fn has_binary_suffix(path: &Path) -> bool {
 fn collect(root: &Path, out: &mut Vec<PathBuf>) -> Result<(), ScanError> {
     let mut dirs: Vec<PathBuf> = Vec::new();
     let mut files: Vec<PathBuf> = Vec::new();
-    let entries = std::fs::read_dir(root)
-        .map_err(|err| ScanError(format!("cannot read {}, {err}", root.display())))?;
+    let entries = std::fs::read_dir(root).map_err(|err| ScanError::cannot_read(root, err))?;
     for entry in entries {
-        let entry =
-            entry.map_err(|err| ScanError(format!("cannot read {}, {err}", root.display())))?;
+        let entry = entry.map_err(|err| ScanError::cannot_read(root, err))?;
         let path = entry.path();
         let file_type = entry
             .file_type()
-            .map_err(|err| ScanError(format!("cannot read {}, {err}", path.display())))?;
+            .map_err(|err| ScanError::cannot_read(&path, err))?;
         if file_type.is_dir() {
             dirs.push(path);
         } else if file_type.is_file() || (file_type.is_symlink() && path.is_file()) {
@@ -109,8 +113,7 @@ fn scan(root: &Path) -> Result<(usize, usize, String), ScanError> {
     let mut en_count = 0;
     let mut lines = String::new();
     for path in &files {
-        let bytes = std::fs::read(path)
-            .map_err(|err| ScanError(format!("cannot read {}, {err}", path.display())))?;
+        let bytes = std::fs::read(path).map_err(|err| ScanError::cannot_read(path, err))?;
         let text = std::str::from_utf8(&bytes).map_err(|err| {
             ScanError(format!("cannot decode {} as UTF-8, {err}", path.display()))
         })?;
