@@ -183,6 +183,29 @@ fn checkpoint_refuses_a_missing_state_directory() {
 }
 
 #[test]
+fn checkpoint_refuses_when_the_session_position_is_a_regular_file() {
+    // WS-P71: the checkpoint creation refusal's store sentence
+    // stands pinned at its own seat. A regular file standing at
+    // the session's own position passes the link check and the
+    // state walk, and the creation of the session's checkpoints
+    // directory is the first seat that can refuse.
+    let base = temp_dir("session-position-file");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    std::fs::create_dir_all(store.join("sessions")).unwrap();
+    std::fs::write(store.join("sessions").join("alpha"), b"planted").unwrap();
+    let error = expect_error(checkpoint(&store, "alpha", &state, None, b""));
+    assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert!(
+        error.to_string().contains(&format!(
+            "the store at {} cannot be written",
+            store.display()
+        )),
+        "{error}"
+    );
+}
+
+#[test]
 fn checkpoint_refuses_a_symlink_in_the_state_tree() {
     let base = temp_dir("state-link");
     let store = base.join("store");
@@ -1207,6 +1230,28 @@ fn fork_refuses_an_existing_session() {
     checkpoint(&store, "beta", &state, None, b"").unwrap();
     let error = expect_error(fork(&store, "alpha", 1, "beta"));
     assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+}
+
+#[test]
+fn fork_refuses_when_the_new_session_position_is_a_regular_file() {
+    // WS-P71: the same creation refusal at the fork seat, the
+    // regular file standing at the new session's position. The
+    // file passes the link check, the source checkpoint reads
+    // verified, and the creation refuses.
+    let base = temp_dir("fork-session-position-file");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    std::fs::write(store.join("sessions").join("beta"), b"planted").unwrap();
+    let error = expect_error(fork(&store, "alpha", 1, "beta"));
+    assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert!(
+        error.to_string().contains(&format!(
+            "the store at {} cannot be written",
+            store.display()
+        )),
+        "{error}"
+    );
 }
 
 #[test]
