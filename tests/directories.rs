@@ -19,7 +19,7 @@ mod common;
 
 use common::{
     checkpoint_dir, copy_tree, damage_manifest_json, declare, expect_error, make_state,
-    manifest_path, run_cli, sha256_hex, tree_bytes,
+    manifest_path, run_cli, sha256_hex, tree_bytes, tree_dirs,
 };
 
 fn temp_dir(tag: &str) -> PathBuf {
@@ -51,28 +51,6 @@ fn db_checkpoint(
     databases: &[&str],
 ) -> wayside::Result<wayside::Manifest> {
     checkpoint_with_databases(store, session, state, None, MEMORY, &declare(databases))
-}
-
-/// The relative paths of every directory standing in a tree,
-/// the tree root itself excluded.
-fn tree_dirs(root: &Path) -> BTreeSet<String> {
-    let mut dirs = BTreeSet::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                dirs.insert(
-                    path.strip_prefix(root)
-                        .unwrap()
-                        .to_string_lossy()
-                        .replace('\\', "/"),
-                );
-                stack.push(path);
-            }
-        }
-    }
-    dirs
 }
 
 // WS-20 and WS-22, the record and its restore.
