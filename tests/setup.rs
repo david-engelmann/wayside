@@ -443,6 +443,27 @@ fn codepoint_scan_skips_a_file_with_an_uppercase_binary_suffix() {
     assert!(result.stdout.contains("en dash U+2013 count 0"));
 }
 
+#[test]
+fn codepoint_scan_skips_every_binary_suffix() {
+    let dir = temp_dir("binary-suffixes-all");
+    for suffix in [
+        "png", "jpg", "jpeg", "gif", "ico", "webp", "pdf", "zip", "gz", "tar", "whl", "so",
+        "dylib", "bin",
+    ] {
+        std::fs::write(dir.join(format!("payload.{suffix}")), "a\u{2014}b").unwrap();
+    }
+    let result = scan_tree(&dir);
+    assert_eq!(result.status, 0, "{}", result.stdout);
+    assert!(result.stdout.contains("em dash U+2014 count 0"));
+    assert!(result.stdout.contains("en dash U+2013 count 0"));
+
+    let control = temp_dir("binary-suffixes-all-control");
+    std::fs::write(control.join("payload.txt"), "a\u{2014}b").unwrap();
+    let result = scan_tree(&control);
+    assert_eq!(result.status, 1);
+    assert!(result.stdout.contains("em dash U+2014 count 1"));
+}
+
 #[cfg(unix)]
 #[test]
 fn codepoint_scan_passes_over_a_pipe_instead_of_reading_it() {
