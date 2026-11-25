@@ -2045,6 +2045,62 @@ fn cli_sequence_refuses_the_python_int_near_misses() {
     );
 }
 
+// WS-P60: the negative number classification admits exactly
+// the matcher's two shapes. A body carrying two dots or
+// ending in a dot is option like, so the sequence place
+// draws the parser's required argument error and an
+// option's value seat refuses the token, while the two
+// admitted shapes still reach the sequence judgement. On
+// the dot stripping classification every damage case below
+// is taken as a positional or as a value and this pin
+// fails.
+
+#[test]
+fn cli_classes_only_the_matchers_two_negative_shapes_as_positional() {
+    let base = temp_dir("cli-negative-shapes");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    let result = run_cli(
+        &store,
+        &["checkpoint", "alpha", "--state", state.to_str().unwrap()],
+    );
+    assert_eq!(result.status, 0, "{}", result.stderr);
+    for spelling in ["-1.2.3", "-1."] {
+        let shown = run_cli(&store, &["show", "alpha", spelling]);
+        assert_eq!(shown.status, 2, "{spelling:?}");
+        assert!(
+            shown
+                .stderr
+                .contains("the following arguments are required: sequence"),
+            "{spelling:?}: {}",
+            shown.stderr
+        );
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_wayside"))
+        .args(["--store", "-1.2.3", "list", "alpha"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("argument --store: expected one argument"),
+        "{stderr}"
+    );
+    for (spelling, message) in [
+        ("-1.5", "invalid sequence '-1.5', use a positive integer"),
+        ("-3", "invalid sequence -3, use a positive integer"),
+        ("-.5", "invalid sequence '-.5', use a positive integer"),
+    ] {
+        let shown = run_cli(&store, &["show", "alpha", spelling]);
+        assert_eq!(shown.status, 2, "{spelling:?}");
+        assert!(
+            shown.stderr.contains(message),
+            "{spelling:?}: {}",
+            shown.stderr
+        );
+    }
+}
+
 // WS-A45: the parser's equals form. An option's value may ride
 // on the option token itself, split at the first equals sign,
 // and --env keeps everything after its own first equals sign as
