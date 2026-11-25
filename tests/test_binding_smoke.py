@@ -343,6 +343,16 @@ def test_manifest_dictionaries_stand_in_the_formats_field_order(tmp_path):
     (database,) = first["databases"]
     assert list(database.keys()) == ["bundle_sha256", "members", "path"]
 
+    # The three dictionaries the pin above leaves unasserted
+    # stand built in the same field order by the same
+    # translation, and a consumer meets their order the same
+    # way, so the pin's name covers them too.
+    (file_entry,) = first["files"]
+    assert list(file_entry.keys()) == ["path", "sha256", "size"]
+    assert list(first["memory"].keys()) == ["sha256", "size"]
+    for member in database["members"]:
+        assert list(member.keys()) == ["path", "sha256", "size"]
+
 
 def test_the_forked_manifest_dictionary_stands_in_the_formats_field_order(
     tmp_path,
