@@ -8,7 +8,7 @@
 //! stores of the earlier rounds as the fixed record a later
 //! reader change must keep reading.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use wayside::{
@@ -19,7 +19,7 @@ mod common;
 
 use common::{
     checkpoint_dir, copy_tree, damage_manifest_json, declare, expect_error, make_state,
-    manifest_path, run_cli, sha256_hex,
+    manifest_path, run_cli, sha256_hex, tree_bytes,
 };
 
 fn temp_dir(tag: &str) -> PathBuf {
@@ -73,29 +73,6 @@ fn tree_dirs(root: &Path) -> BTreeSet<String> {
         }
     }
     dirs
-}
-
-/// Every file standing in a tree, as relative path to bytes.
-fn tree_files(root: &Path) -> BTreeMap<String, Vec<u8>> {
-    let mut files = BTreeMap::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                stack.push(path);
-            } else {
-                files.insert(
-                    path.strip_prefix(root)
-                        .unwrap()
-                        .to_string_lossy()
-                        .replace('\\', "/"),
-                    std::fs::read(&path).unwrap(),
-                );
-            }
-        }
-    }
-    files
 }
 
 // WS-20 and WS-22, the record and its restore.
@@ -369,7 +346,7 @@ fn verify_reports_a_checkpoint_with_directories_clean() {
     let state = make_state(&base.join("state"), &[("plan.txt", b"first plan\n")]);
     make_dirs(&state, &["spool", "cache/deep"]);
     plain_checkpoint(&store, "alpha", &state).unwrap();
-    let before_files = tree_files(&store);
+    let before_files = tree_bytes(&store);
     let before_dirs = tree_dirs(&store);
     let verified = verify_checkpoint(&store, "alpha", 1).unwrap();
     assert_eq!(
@@ -380,7 +357,7 @@ fn verify_reports_a_checkpoint_with_directories_clean() {
             "spool".to_string()
         ]
     );
-    assert_eq!(tree_files(&store), before_files, "verify changed the store");
+    assert_eq!(tree_bytes(&store), before_files, "verify changed the store");
     assert_eq!(tree_dirs(&store), before_dirs, "verify changed the store");
 }
 
@@ -768,7 +745,7 @@ fn fixture_directories() {
         let expected = fixture
             .join("expected-restore")
             .join(format!("alpha-{sequence}"));
-        assert_eq!(tree_files(&target), tree_files(&expected));
+        assert_eq!(tree_bytes(&target), tree_bytes(&expected));
         let listing = std::fs::read_to_string(
             fixture.join(format!("expected-restore-alpha-{sequence}-dirs.txt")),
         )
