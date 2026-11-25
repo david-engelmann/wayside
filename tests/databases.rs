@@ -10,7 +10,7 @@
 //! frozen Python stores of the port as the fixed record a
 //! later reader change must keep reading.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
@@ -51,6 +51,28 @@ fn db_checkpoint(
     databases: &[&str],
 ) -> wayside::Result<wayside::Manifest> {
     checkpoint_with_databases(store, session, state, None, b"", &declare(databases))
+}
+
+/// The relative paths of every directory standing in a tree,
+/// the tree root itself excluded.
+fn tree_dirs(root: &Path) -> BTreeSet<String> {
+    let mut dirs = BTreeSet::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.insert(
+                    path.strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                );
+                stack.push(path);
+            }
+        }
+    }
+    dirs
 }
 
 fn flip_first_byte(path: &Path) {
@@ -1458,8 +1480,10 @@ fn verify_leaves_the_store_byte_for_byte_unchanged() {
     );
     db_checkpoint(&store, "alpha", &state, &["app.db"]).unwrap();
     let before = hash_tree(&store);
+    let before_dirs = tree_dirs(&store);
     verify_checkpoint(&store, "alpha", 1).unwrap();
     assert_eq!(hash_tree(&store), before);
+    assert_eq!(tree_dirs(&store), before_dirs);
 }
 
 #[test]
