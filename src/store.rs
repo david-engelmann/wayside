@@ -40,6 +40,16 @@ pub(crate) fn checkpoints_dir(root: &Path, session: &str) -> PathBuf {
     session_dir(root, session).join(CHECKPOINTS_NAME)
 }
 
+pub(crate) fn create_checkpoints_dir(root: &Path, session: &str) -> Result<()> {
+    let dir = checkpoints_dir(root, session);
+    fs::create_dir_all(&dir).map_err(|exc| {
+        Error::wayside(format!(
+            "the store at {} cannot be written, {exc}",
+            root.display()
+        ))
+    })
+}
+
 pub(crate) fn sequence_name(sequence: i64) -> String {
     format!("{sequence:06}")
 }

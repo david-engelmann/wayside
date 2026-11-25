@@ -14,7 +14,7 @@ use crate::model::{
     DatabaseStanding, ForkRef, Manifest,
 };
 use crate::store::{
-    check_session_links, checkpoints_dir, load_manifest, locked, now_isoformat,
+    check_session_links, create_checkpoints_dir, load_manifest, locked, now_isoformat,
     published_sequences, read_verified, require_session, verify_payloads,
 };
 use crate::{BUNDLE_BOUND, ENV_FILE_NAME, ENV_HEADER, MEMORY_FILE_NAME};
@@ -221,13 +221,7 @@ fn checkpoint_inner(
         })
         .cloned()
         .collect();
-    let ck_dir = checkpoints_dir(store, session);
-    fs::create_dir_all(&ck_dir).map_err(|exc| {
-        Error::wayside(format!(
-            "the store at {} cannot be written, {exc}",
-            store.display()
-        ))
-    })?;
+    create_checkpoints_dir(store, session)?;
     let sequences = published_sequences(store, session);
     let sequence = match sequences.last() {
         Some(last) => last.checked_add(1).ok_or_else(|| {
@@ -415,13 +409,7 @@ pub fn fork(
             store.display()
         )));
     }
-    let ck_dir = checkpoints_dir(store, new_session);
-    fs::create_dir_all(&ck_dir).map_err(|exc| {
-        Error::wayside(format!(
-            "the store at {} cannot be written, {exc}",
-            store.display()
-        ))
-    })?;
+    create_checkpoints_dir(store, new_session)?;
     let forked = Manifest {
         session: new_session.to_string(),
         sequence: 1,
