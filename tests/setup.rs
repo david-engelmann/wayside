@@ -261,6 +261,57 @@ fn ci_gate_parser_rejects_a_job_disabled_with_if_false() {
     assert!(commands.iter().any(|c| c == CLIPPY_COMMAND));
 }
 
+fn binding_smoke_command_stands(ci_text: &str) -> bool {
+    let Some(block) = ci_text.split("\n  binding:\n").nth(1) else {
+        return false;
+    };
+    let mut job_disabled = false;
+    let mut in_steps = false;
+    let mut carries_smoke = false;
+    for line in block.lines() {
+        let stripped = line.trim();
+        if stripped.starts_with('#') {
+            continue;
+        }
+        if !in_steps && stripped.starts_with("if:") {
+            let value = stripped
+                .split_once(':')
+                .map(|(_, rest)| rest)
+                .unwrap_or_default()
+                .trim()
+                .trim_matches(|c| c == '\'' || c == '"')
+                .to_lowercase();
+            if value == "false" {
+                job_disabled = true;
+            }
+            continue;
+        }
+        if stripped == "steps:" {
+            in_steps = true;
+            continue;
+        }
+        if in_steps && stripped == "python -m pytest tests/test_binding_smoke.py" {
+            carries_smoke = true;
+        }
+    }
+    carries_smoke && !job_disabled
+}
+
+#[test]
+fn ci_carries_the_binding_job_undisabled_with_its_smoke_command() {
+    let ci_text = read(".github/workflows/ci.yml");
+    let job_head = "  binding:\n    runs-on: ubuntu-latest";
+    assert!(ci_text.contains(job_head));
+    assert!(binding_smoke_command_stands(&ci_text));
+    for flag in ["false", "\"false\""] {
+        let disabled = ci_text.replace(
+            job_head,
+            &format!("  binding:\n    if: {flag}\n    runs-on: ubuntu-latest"),
+        );
+        assert!(!binding_smoke_command_stands(&disabled));
+    }
+}
+
 struct ScanOutput {
     status: i32,
     stdout: String,
