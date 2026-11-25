@@ -1712,6 +1712,51 @@ fn manifest_with_an_uppercase_z_zone_is_accepted() {
     assert_eq!(manifest.created_at, "2026-11-02T10:00:00Z");
 }
 
+// WS-P40, the accepting side of the port amendment's timestamp
+// family. The amendment takes a space separator and a lowercase t
+// in place of the T beside the T itself, and a numeric offset away
+// from zero beside the uppercase Z, and the pin above fed the T
+// and Z shape alone.
+
+#[test]
+fn manifest_with_a_space_separator_timestamp_is_accepted() {
+    let base = temp_dir("created-space");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["created_at"] = serde_json::json!("2026-11-02 10:00:00Z");
+    });
+    let manifest = show(&store, "alpha", 1).unwrap();
+    assert_eq!(manifest.created_at, "2026-11-02 10:00:00Z");
+}
+
+#[test]
+fn manifest_with_a_lowercase_t_separator_timestamp_is_accepted() {
+    let base = temp_dir("created-lower-t");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["created_at"] = serde_json::json!("2026-11-02t10:00:00Z");
+    });
+    let manifest = show(&store, "alpha", 1).unwrap();
+    assert_eq!(manifest.created_at, "2026-11-02t10:00:00Z");
+}
+
+#[test]
+fn manifest_with_a_nonzero_offset_timestamp_is_accepted() {
+    let base = temp_dir("created-offset");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["created_at"] = serde_json::json!("2026-11-02T10:00:00+05:30");
+    });
+    let manifest = show(&store, "alpha", 1).unwrap();
+    assert_eq!(manifest.created_at, "2026-11-02T10:00:00+05:30");
+}
+
 #[test]
 fn manifest_with_a_lowercase_z_zone_is_refused() {
     wrong_typed_value_case("created-lower-z", &|value| {
@@ -1742,6 +1787,31 @@ fn manifest_with_a_leap_second_is_refused() {
 fn manifest_with_a_year_of_zero_is_refused() {
     wrong_typed_value_case("created-year-zero", &|value| {
         value["created_at"] = serde_json::json!("0000-01-01T00:00:00+00:00");
+    });
+}
+
+// WS-P40, the refusing side of the same family. The amendment
+// requires the offset and refuses a date alone and a fraction
+// written with a comma separator, and no pin fed those shapes.
+
+#[test]
+fn manifest_with_a_date_alone_timestamp_is_refused() {
+    wrong_typed_value_case("created-date-alone", &|value| {
+        value["created_at"] = serde_json::json!("2026-11-02");
+    });
+}
+
+#[test]
+fn manifest_with_a_timestamp_carrying_no_offset_is_refused() {
+    wrong_typed_value_case("created-no-offset", &|value| {
+        value["created_at"] = serde_json::json!("2026-11-02T10:00:00");
+    });
+}
+
+#[test]
+fn manifest_with_a_comma_fraction_timestamp_is_refused() {
+    wrong_typed_value_case("created-comma-fraction", &|value| {
+        value["created_at"] = serde_json::json!("2026-11-02T10:00:00,5+00:00");
     });
 }
 
