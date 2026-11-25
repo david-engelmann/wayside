@@ -15,7 +15,7 @@ use crate::model::{
 };
 use crate::store::{
     check_session_links, checkpoints_dir, load_manifest, locked, now_isoformat,
-    published_sequences, read_verified, require_session,
+    published_sequences, read_verified, require_session, verify_payloads,
 };
 use crate::{BUNDLE_BOUND, ENV_FILE_NAME, ENV_HEADER, MEMORY_FILE_NAME};
 use sha2::{Digest, Sha256};
@@ -472,7 +472,7 @@ pub fn verify_checkpoint(store: &Path, session: &str, sequence: i64) -> Result<M
     validate_session_id(session)?;
     validate_sequence(sequence)?;
     let manifest = load_manifest(store, session, sequence)?;
-    read_verified(store, session, sequence, &manifest)?;
+    verify_payloads(store, session, sequence, &manifest)?;
     Ok(manifest)
 }
 

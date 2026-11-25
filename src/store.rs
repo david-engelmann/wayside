@@ -352,3 +352,49 @@ pub(crate) fn read_verified(
     )?;
     Ok((entries, memory))
 }
+/// Check every payload of a checkpoint against the manifest
+/// without holding the payloads: the recorded files, then
+/// every database member, then the memory document, each
+/// payload's bytes dropped before the next one is read. The
+/// refusals, their order, and the first payload named stand
+/// as read_verified's own; read_verified keeps its returning
+/// form for the callers that place the bytes it reads.
+pub(crate) fn verify_payloads(
+    root: &Path,
+    session: &str,
+    sequence: i64,
+    manifest: &Manifest,
+) -> Result<()> {
+    let ck = checkpoint_dir(root, session, sequence);
+    for entry in &manifest.files {
+        read_payload(
+            &ck,
+            session,
+            sequence,
+            &entry.path,
+            &entry.sha256,
+            entry.size,
+        )?;
+    }
+    for database in &manifest.databases {
+        for member in &database.members {
+            read_payload(
+                &ck,
+                session,
+                sequence,
+                &member.path,
+                &member.sha256,
+                member.size,
+            )?;
+        }
+    }
+    read_recorded(
+        &ck.join(MEMORY_NAME),
+        session,
+        sequence,
+        "the memory document",
+        &manifest.memory.sha256,
+        manifest.memory.size,
+    )?;
+    Ok(())
+}
