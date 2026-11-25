@@ -130,8 +130,16 @@ fn is_option_like(token: &str) -> bool {
     // as argparse's negative number matcher holds when no
     // option looks like a negative number.
     let body = &token[1..];
-    let digits: String = body.chars().filter(|c| *c != '.').collect();
-    if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) {
+    let mut parts = body.split('.');
+    let head = parts.next().unwrap_or("");
+    let digits_only = |part: &str| part.chars().all(|c| c.is_ascii_digit());
+    let negative_number = match parts.next() {
+        None => !head.is_empty() && digits_only(head),
+        Some(tail) => {
+            parts.next().is_none() && digits_only(head) && !tail.is_empty() && digits_only(tail)
+        }
+    };
+    if negative_number {
         return false;
     }
     true
