@@ -831,6 +831,68 @@ fn codepoint_scan_refuses_a_root_that_does_not_stand() {
     assert!(result.stderr.contains("cannot read"), "{}", result.stderr);
 }
 
+// WS-P85: the cannot read refusal stands pinned below the
+// root as well as at it. A scanner that passed over an
+// unreadable file or an unlistable directory in silence,
+// counting the rest of the tree, passes every other pin
+// and fails these two. Each pin probes its staging first
+// and stands down where the host grants the read anyway.
+
+#[cfg(unix)]
+#[test]
+fn codepoint_scan_refuses_an_unreadable_file_below_the_root() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = temp_dir("scan-unreadable-file");
+    std::fs::write(dir.join("clean.md"), "clean").unwrap();
+    let blocked = dir.join("blocked.md");
+    std::fs::write(&blocked, "a\u{2014}b").unwrap();
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read(&blocked).is_ok() {
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o644)).unwrap();
+        return;
+    }
+    let result = scan_tree(&dir);
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(result.status, 2);
+    assert!(result.stderr.contains("scan error"), "{}", result.stderr);
+    assert!(result.stderr.contains("cannot read"), "{}", result.stderr);
+    assert!(
+        result.stderr.contains(&blocked.display().to_string()),
+        "{}",
+        result.stderr
+    );
+    assert!(!result.stdout.contains("count"), "{}", result.stdout);
+}
+
+#[cfg(unix)]
+#[test]
+fn codepoint_scan_refuses_an_unlistable_directory_below_the_root() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = temp_dir("scan-unlistable-dir");
+    std::fs::write(dir.join("clean.md"), "clean").unwrap();
+    let sub = dir.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    std::fs::write(sub.join("inner.md"), "a\u{2014}b").unwrap();
+    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read_dir(&sub).is_ok() {
+        std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+    let result = scan_tree(&dir);
+    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(result.status, 2);
+    assert!(result.stderr.contains("scan error"), "{}", result.stderr);
+    assert!(result.stderr.contains("cannot read"), "{}", result.stderr);
+    assert!(
+        result.stderr.contains(&sub.display().to_string()),
+        "{}",
+        result.stderr
+    );
+    assert!(!result.stdout.contains("count"), "{}", result.stdout);
+}
+
 /// WS-A73: a symlink to a directory below the scan root is
 /// passed over, never followed. The link names a directory
 /// outside the root holding a dash file; a walk that
