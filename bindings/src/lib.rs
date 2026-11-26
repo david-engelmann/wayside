@@ -8,11 +8,13 @@
 //! inside a call never stalls the other threads of the calling
 //! process while it waits. A library refusal becomes a Python
 //! exception carrying the same message text the command line
-//! prints, under a subclass of WaysideError picked by the exit
-//! class of the refusal, so a Python caller can tell a plain
-//! refusal from an invalid name from a missing checkpoint from a
-//! corrupt store from an unusable target the way a shell caller
-//! tells them apart by exit code.
+//! prints, under a subclass of WaysideError picked by the refusal's
+//! variant, so a Python caller can tell a plain refusal from an
+//! invalid name from a missing checkpoint from a corrupt store
+//! from an unusable target apart by the subclass it catches,
+//! where a shell caller is told the named classes apart by the
+//! message text, its exit code separating only the plain
+//! refusals, at 1, from the named classes, at 2.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
