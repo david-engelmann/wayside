@@ -539,6 +539,8 @@ fn codepoint_scan_fails_loudly_on_undecodable_input() {
     let result = scan_tree(&dir);
     assert_eq!(result.status, 2);
     assert!(result.stderr.contains("note.md"));
+    assert!(result.stderr.contains("cannot decode"));
+    assert!(result.stderr.contains("as UTF-8"));
 }
 
 #[test]
@@ -710,6 +712,7 @@ fn codepoint_scan_with_an_unwritable_output_is_a_scan_error() {
     let status = child.wait().unwrap();
     assert_eq!(status.code().unwrap_or(-1), 2, "{stderr}");
     assert!(stderr.contains("scan error"), "{stderr}");
+    assert!(stderr.contains("cannot write the scan output"), "{stderr}");
     assert!(!stderr.contains("panicked"), "{stderr}");
 }
 
@@ -754,6 +757,7 @@ fn codepoint_scan_refuses_a_root_that_does_not_stand() {
     assert_eq!(result.status, 2);
     assert!(result.stderr.contains("scan error"), "{}", result.stderr);
     assert!(result.stderr.contains("no-such-tree"), "{}", result.stderr);
+    assert!(result.stderr.contains("cannot read"), "{}", result.stderr);
 }
 
 /// WS-A73: a symlink to a directory below the scan root is
