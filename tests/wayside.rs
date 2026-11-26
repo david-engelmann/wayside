@@ -180,6 +180,13 @@ fn checkpoint_refuses_a_missing_state_directory() {
         b"",
     ));
     assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "the state directory at {} does not exist or is not a directory",
+            base.join("nope").display()
+        )
+    );
 }
 
 #[test]
@@ -366,13 +373,23 @@ fn env_values_with_a_newline_or_nul_are_refused() {
     let base = temp_dir("env-refused");
     let store = base.join("store");
     let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
-    for env in [
-        env_of(&[("BAD", "two\nlines")]),
-        env_of(&[("BAD", "has\0nul")]),
-        env_of(&[("1BAD", "fine value")]),
+    for (env, sentence) in [
+        (
+            env_of(&[("BAD", "two\nlines")]),
+            "invalid env, the env value for BAD is not a single line of text",
+        ),
+        (
+            env_of(&[("BAD", "has\0nul")]),
+            "invalid env, the env value for BAD is not a single line of text",
+        ),
+        (
+            env_of(&[("1BAD", "fine value")]),
+            "invalid env, the env key '1BAD' is not a sound env name",
+        ),
     ] {
         let error = expect_error(checkpoint(&store, "alpha", &state, Some(&env), b""));
         assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+        assert_eq!(error.to_string(), sentence);
     }
 }
 
@@ -1322,6 +1339,13 @@ fn fork_refuses_an_existing_session() {
     checkpoint(&store, "beta", &state, None, b"").unwrap();
     let error = expect_error(fork(&store, "alpha", 1, "beta"));
     assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "session beta already holds a checkpoint in the store at {}, so fork will not overwrite it",
+            store.display()
+        )
+    );
 }
 
 #[test]
