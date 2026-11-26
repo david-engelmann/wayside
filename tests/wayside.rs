@@ -280,6 +280,20 @@ fn checkpoint_refuses_a_non_regular_file_in_the_state_tree() {
     assert_eq!(made, 0);
     let error = expect_error(checkpoint(&store, "alpha", &state, None, b""));
     assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("the state directory holds a non regular file at"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error
+            .message()
+            .contains("which a checkpoint does not record"),
+        "{}",
+        error.message()
+    );
 }
 
 #[test]
@@ -289,6 +303,20 @@ fn checkpoint_refuses_a_reserved_top_level_name() {
     let state = make_state(&base.join("state"), &[("wayside.env", b"planted")]);
     let error = expect_error(checkpoint(&store, "alpha", &state, None, b""));
     assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("the state directory holds a top level file named wayside.env"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error
+            .message()
+            .contains("which is a name restore writes, so a checkpoint does not record it"),
+        "{}",
+        error.message()
+    );
     let state2 = make_state(
         &base.join("state2"),
         &[("nested/wayside.env", b"nested is fine")],
