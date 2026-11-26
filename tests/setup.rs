@@ -100,6 +100,17 @@ fn readme_status_states_one_hundred_of_one_hundred() {
     assert!(status.contains("a9bdc896322b1787d0719d6a76baaf1d91ef8860"));
 }
 
+fn if_value_is_false(line: &str) -> bool {
+    let Some(value) = line.strip_prefix("if:") else {
+        return false;
+    };
+    value
+        .trim()
+        .trim_matches(|c| c == '\'' || c == '"')
+        .to_lowercase()
+        == "false"
+}
+
 fn flush_step(step_lines: &mut Vec<String>, commands: &mut Vec<String>) {
     if step_lines.is_empty() {
         return;
@@ -107,14 +118,8 @@ fn flush_step(step_lines: &mut Vec<String>, commands: &mut Vec<String>) {
     let mut disabled = false;
     let mut runs = Vec::new();
     for stripped in step_lines.iter() {
-        if let Some(value) = stripped.strip_prefix("if:") {
-            let value = value
-                .trim()
-                .trim_matches(|c| c == '\'' || c == '"')
-                .to_lowercase();
-            if value == "false" {
-                disabled = true;
-            }
+        if if_value_is_false(stripped) {
+            disabled = true;
         }
         if let Some(pos) = stripped.find("run:") {
             runs.push(stripped[pos + "run:".len()..].trim().to_string());
@@ -142,14 +147,7 @@ fn run_commands(ci_text: &str) -> Vec<String> {
             continue;
         }
         if in_test_job && !in_steps && stripped.starts_with("if:") {
-            let value = stripped
-                .split_once(':')
-                .map(|(_, rest)| rest)
-                .unwrap_or_default()
-                .trim()
-                .trim_matches(|c| c == '\'' || c == '"')
-                .to_lowercase();
-            if value == "false" {
+            if if_value_is_false(stripped) {
                 job_disabled = true;
             }
             continue;
@@ -329,14 +327,7 @@ fn binding_smoke_command_stands(ci_text: &str) -> bool {
             continue;
         }
         if !in_steps && stripped.starts_with("if:") {
-            let value = stripped
-                .split_once(':')
-                .map(|(_, rest)| rest)
-                .unwrap_or_default()
-                .trim()
-                .trim_matches(|c| c == '\'' || c == '"')
-                .to_lowercase();
-            if value == "false" {
+            if if_value_is_false(stripped) {
                 job_disabled = true;
             }
             continue;
@@ -352,14 +343,8 @@ fn binding_smoke_command_stands(ci_text: &str) -> bool {
             step_disabled = false;
             step_carries_smoke = false;
             let head = stripped[2..].trim();
-            if let Some(value) = head.strip_prefix("if:") {
-                let value = value
-                    .trim()
-                    .trim_matches(|c| c == '\'' || c == '"')
-                    .to_lowercase();
-                if value == "false" {
-                    step_disabled = true;
-                }
+            if if_value_is_false(head) {
+                step_disabled = true;
             }
             if head == "python -m pytest tests/test_binding_smoke.py" {
                 step_carries_smoke = true;
@@ -367,14 +352,8 @@ fn binding_smoke_command_stands(ci_text: &str) -> bool {
             continue;
         }
         if in_steps {
-            if let Some(value) = stripped.strip_prefix("if:") {
-                let value = value
-                    .trim()
-                    .trim_matches(|c| c == '\'' || c == '"')
-                    .to_lowercase();
-                if value == "false" {
-                    step_disabled = true;
-                }
+            if if_value_is_false(stripped) {
+                step_disabled = true;
             }
             if stripped == "python -m pytest tests/test_binding_smoke.py" {
                 step_carries_smoke = true;
