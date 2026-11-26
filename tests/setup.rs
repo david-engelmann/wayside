@@ -320,7 +320,9 @@ fn binding_smoke_command_stands(ci_text: &str) -> bool {
     };
     let mut job_disabled = false;
     let mut in_steps = false;
-    let mut carries_smoke = false;
+    let mut step_disabled = false;
+    let mut step_carries_smoke = false;
+    let mut smoke_stands = false;
     for line in block.lines() {
         let stripped = line.trim();
         if stripped.starts_with('#') {
@@ -343,11 +345,46 @@ fn binding_smoke_command_stands(ci_text: &str) -> bool {
             in_steps = true;
             continue;
         }
-        if in_steps && stripped == "python -m pytest tests/test_binding_smoke.py" {
-            carries_smoke = true;
+        if in_steps && stripped.starts_with("- ") {
+            if step_carries_smoke && !step_disabled {
+                smoke_stands = true;
+            }
+            step_disabled = false;
+            step_carries_smoke = false;
+            let head = stripped[2..].trim();
+            if let Some(value) = head.strip_prefix("if:") {
+                let value = value
+                    .trim()
+                    .trim_matches(|c| c == '\'' || c == '"')
+                    .to_lowercase();
+                if value == "false" {
+                    step_disabled = true;
+                }
+            }
+            if head == "python -m pytest tests/test_binding_smoke.py" {
+                step_carries_smoke = true;
+            }
+            continue;
+        }
+        if in_steps {
+            if let Some(value) = stripped.strip_prefix("if:") {
+                let value = value
+                    .trim()
+                    .trim_matches(|c| c == '\'' || c == '"')
+                    .to_lowercase();
+                if value == "false" {
+                    step_disabled = true;
+                }
+            }
+            if stripped == "python -m pytest tests/test_binding_smoke.py" {
+                step_carries_smoke = true;
+            }
         }
     }
-    carries_smoke && !job_disabled
+    if step_carries_smoke && !step_disabled {
+        smoke_stands = true;
+    }
+    smoke_stands && !job_disabled
 }
 
 #[test]
@@ -360,6 +397,17 @@ fn ci_carries_the_binding_job_undisabled_with_its_smoke_command() {
         let disabled = ci_text.replace(
             job_head,
             &format!("  binding:\n    if: {flag}\n    runs-on: ubuntu-latest"),
+        );
+        assert!(!binding_smoke_command_stands(&disabled));
+    }
+    let smoke_step = "      - name: Build the binding and run the smoke test\n        run: |";
+    assert!(ci_text.contains(smoke_step));
+    for flag in ["false", "\"false\""] {
+        let disabled = ci_text.replace(
+            smoke_step,
+            &format!(
+                "      - name: Build the binding and run the smoke test\n        if: {flag}\n        run: |"
+            ),
         );
         assert!(!binding_smoke_command_stands(&disabled));
     }
