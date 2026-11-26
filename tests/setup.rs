@@ -512,6 +512,29 @@ fn codepoint_scan_reports_each_files_counts_and_the_totals() {
     assert_eq!(result.stdout, expected);
 }
 
+// WS-P84: the walk's descent below the root stands pinned
+// on the counting side. A scanner that collected only the
+// root's own files, or that descended one level and no
+// further, passes every standing pin and fails this one.
+
+#[test]
+fn codepoint_scan_counts_dashes_below_the_root() {
+    let dir = temp_dir("nested-counts");
+    std::fs::write(dir.join("clean.md"), "clean").unwrap();
+    let sub = dir.join("sub");
+    std::fs::create_dir_all(sub.join("deep")).unwrap();
+    std::fs::write(sub.join("note.md"), "a\u{2014}b").unwrap();
+    std::fs::write(sub.join("deep").join("note.md"), "a\u{2014}b\u{2013}c").unwrap();
+    let result = scan_tree(&dir);
+    assert_eq!(result.status, 1);
+    let expected = format!(
+        "{}: em dash 1, en dash 0\n{}: em dash 1, en dash 1\nem dash U+2014 count 2\nen dash U+2013 count 1\n",
+        sub.join("note.md").display(),
+        sub.join("deep").join("note.md").display()
+    );
+    assert_eq!(result.stdout, expected);
+}
+
 #[test]
 fn codepoint_scan_scans_a_root_under_an_excluded_ancestor() {
     let dir = temp_dir("excluded-ancestor").join("venv").join("tree");
