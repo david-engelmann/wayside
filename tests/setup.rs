@@ -252,6 +252,28 @@ fn ci_carries_the_fleet_credential_hygiene() {
 }
 
 #[test]
+fn ci_runs_on_push_and_on_pull_request() {
+    // The workflow's trigger block stands judged by this pin
+    // alone: the gate pins read the jobs below it and never
+    // consult the block, so deleting the pull_request entry
+    // would pass every other pin while the hosted gate
+    // stopped running on pull requests (WS-P75).
+    let text = read(".github/workflows/ci.yml");
+    let trigger_block = text
+        .split("\npermissions:")
+        .next()
+        .expect("the workflow carries a permissions block");
+    assert!(
+        trigger_block.contains("push:"),
+        "the workflow does not run on push"
+    );
+    assert!(
+        trigger_block.contains("pull_request:"),
+        "the workflow does not run on pull request"
+    );
+}
+
+#[test]
 fn ci_gate_parser_skips_a_step_disabled_with_if_false() {
     let ci_text = read(".github/workflows/ci.yml");
     let gate_step = "      - name: Run the local gate\n        run: cargo test";
