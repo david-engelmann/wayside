@@ -193,6 +193,19 @@ fn ci_carries_the_fleet_credential_hygiene() {
     // than a moving branch name.
     assert!(text.contains("permissions:"));
     assert!(text.contains("contents: read"));
+    // No permission line in the workflow carries a write
+    // value on any scope, and no write-all shorthand stands:
+    // a write grant beside the read grant, a job level
+    // permissions block, or a further scope at write fails
+    // this pin (WS-P74).
+    assert!(!text.contains("write-all"));
+    for line in text.lines() {
+        let stripped = line.trim();
+        assert!(
+            !stripped.ends_with(": write"),
+            "a permission line carries a write value: {stripped}"
+        );
+    }
     // Every checkout step stands judged in its own block, not
     // by one whole-text presence: the workflow carries two
     // checkout steps, one per job, and dropping the setting
