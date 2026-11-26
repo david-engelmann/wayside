@@ -34,7 +34,7 @@ create_exception!(wayside, CorruptError, WaysideError);
 create_exception!(wayside, TargetError, WaysideError);
 
 /// Translate a library refusal into the Python exception of its
-/// exit class, carrying the message the command line prints.
+/// variant, carrying the message the command line prints.
 fn to_py_error(error: Error) -> PyErr {
     let message = error.message().to_string();
     match error {
