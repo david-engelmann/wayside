@@ -9,7 +9,7 @@ InvalidNameError a session id or sequence in the wrong shape,
 NotFoundError a session or checkpoint missing from the store,
 CorruptError a manifest or payload that cannot be read as it was
 recorded, and TargetError a restore target the store may not
-write, mirroring the exit classes the command line reports.
+write, mirroring the library's five error variants one for one.
 """
 
 from ._wayside import (
