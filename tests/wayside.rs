@@ -235,10 +235,38 @@ fn checkpoint_refuses_a_symlink_in_the_state_tree() {
     std::os::unix::fs::symlink(state.join("real.txt"), state.join("link.txt")).unwrap();
     let error = expect_error(checkpoint(&store, "alpha", &state, None, b""));
     assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("the state directory holds a symbolic link at"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error
+            .message()
+            .contains("which a checkpoint does not record"),
+        "{}",
+        error.message()
+    );
     std::fs::remove_file(state.join("link.txt")).unwrap();
     std::os::unix::fs::symlink(&state, state.join("linked-dir")).unwrap();
     let error = expect_error(checkpoint(&store, "alpha", &state, None, b""));
     assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("the state directory holds a symbolic link at"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error
+            .message()
+            .contains("which a checkpoint does not record"),
+        "{}",
+        error.message()
+    );
 }
 
 #[test]
@@ -3055,6 +3083,20 @@ fn checkpoint_refuses_a_file_name_carrying_a_backslash() {
         "{}",
         error.message()
     );
+    assert!(
+        error
+            .message()
+            .contains("the state directory holds an entry whose name carries"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error
+            .message()
+            .contains("which a checkpoint does not record"),
+        "{}",
+        error.message()
+    );
     assert!(!checkpoint_dir(&store, "alpha", 1).exists());
     let clean = make_state(&base.join("clean"), &[("a.txt", b"a")]);
     let manifest = checkpoint(&store, "alpha", &clean, None, b"").unwrap();
@@ -3082,6 +3124,20 @@ fn checkpoint_refuses_a_directory_name_carrying_a_backslash() {
     assert_eq!(error.exit_code(), 1);
     assert!(
         error.message().contains("carries a backslash at x/y"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error
+            .message()
+            .contains("the state directory holds an entry whose name carries"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error
+            .message()
+            .contains("which a checkpoint does not record"),
         "{}",
         error.message()
     );
@@ -3115,6 +3171,20 @@ fn checkpoint_refuses_a_backslash_name_colliding_with_a_nested_path() {
     assert_eq!(error.exit_code(), 1);
     assert!(
         error.message().contains("carries a backslash at x/y"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error
+            .message()
+            .contains("the state directory holds an entry whose name carries"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error
+            .message()
+            .contains("which a checkpoint does not record"),
         "{}",
         error.message()
     );
