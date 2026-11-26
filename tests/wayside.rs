@@ -416,6 +416,13 @@ fn restore_refuses_a_non_empty_target_and_leaves_it_untouched() {
     std::fs::write(target.join("sentinel.txt"), b"do not touch").unwrap();
     let error = expect_error(restore(&store, "alpha", 1, &target));
     assert!(matches!(error, Error::Target(_)), "{error:?}");
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "the restore target at {} is not empty, and restore never overwrites a non empty directory",
+            target.display()
+        )
+    );
     let mut expected = BTreeMap::new();
     expected.insert("sentinel.txt".to_string(), sha256_hex(b"do not touch"));
     assert_eq!(hash_tree(&target), expected);
@@ -504,6 +511,13 @@ fn restore_refuses_a_file_at_the_target_path() {
     std::fs::write(&target, b"a file, not a directory").unwrap();
     let error = expect_error(restore(&store, "alpha", 1, &target));
     assert!(matches!(error, Error::Target(_)), "{error:?}");
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "the restore target at {} exists and is not a directory",
+            target.display()
+        )
+    );
     assert_eq!(std::fs::read(&target).unwrap(), b"a file, not a directory");
 }
 
