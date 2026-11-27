@@ -268,8 +268,8 @@ pub(crate) fn read_state_tree(state: &Path, reader: &StateTreeReader) -> Result<
     Ok((entries, dirs))
 }
 
-fn refuse_unrecordable_entry(path: &Path, rel: &str) -> Result<()> {
-    if path.is_symlink() {
+fn refuse_unrecordable_entry(path: &Path, rel: &str, is_link: bool) -> Result<()> {
+    if is_link {
         return Err(Error::wayside(format!(
             "the state directory holds a symbolic link at {rel}, \
              which a checkpoint does not record"
@@ -304,8 +304,16 @@ fn read_state_dir(
             dir.display()
         ))
     })?;
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    let mut files: Vec<PathBuf> = Vec::new();
+    // Each entry is classified by the one stat that does not
+    // follow links, which answers whether the entry is a link,
+    // a directory, or a regular file in the one reading
+    // (WS-A37). A link is classified by the metadata that
+    // follows it, as the walk has always classified it, and
+    // each entry's kind travels through the name sorts into
+    // the two loops below, whose checks read the carried kind
+    // instead of statting the entry again.
+    let mut dirs: Vec<(PathBuf, bool)> = Vec::new();
+    let mut files: Vec<(PathBuf, bool, bool)> = Vec::new();
     for path in listed {
         // A name that is not valid UTF-8 cannot be recorded:
         // rel_of renders it lossily, so it would stand in the
@@ -323,31 +331,45 @@ fn read_state_dir(
                 dir.display()
             )));
         }
-        if fs::metadata(&path)
-            .map(|meta| meta.is_dir())
-            .unwrap_or(false)
-        {
-            dirs.push(path);
+        let link_meta = fs::symlink_metadata(&path).ok();
+        let is_link = link_meta
+            .as_ref()
+            .is_some_and(|meta| meta.file_type().is_symlink());
+        if is_link {
+            if fs::metadata(&path)
+                .map(|meta| meta.is_dir())
+                .unwrap_or(false)
+            {
+                dirs.push((path, true));
+            } else {
+                files.push((path, true, false));
+            }
+        } else if let Some(meta) = link_meta {
+            if meta.is_dir() {
+                dirs.push((path, false));
+            } else {
+                files.push((path, false, meta.is_file()));
+            }
         } else {
-            files.push(path);
+            files.push((path, false, false));
         }
     }
-    let by_name = |a: &PathBuf, b: &PathBuf| {
+    let by_name = |a: &Path, b: &Path| {
         a.file_name()
             .map(|name| name.to_string_lossy())
             .cmp(&b.file_name().map(|name| name.to_string_lossy()))
     };
-    dirs.sort_by(by_name);
-    files.sort_by(by_name);
+    dirs.sort_by(|a, b| by_name(&a.0, &b.0));
+    files.sort_by(|a, b| by_name(&a.0, &b.0));
     let rel_of = |path: &Path| -> String {
         path.strip_prefix(state)
             .unwrap_or(path)
             .to_string_lossy()
             .replace('\\', "/")
     };
-    for path in &dirs {
+    for (path, is_link) in &dirs {
         let rel = rel_of(path);
-        refuse_unrecordable_entry(path, &rel)?;
+        refuse_unrecordable_entry(path, &rel, *is_link)?;
         if !rel.contains('/') && RESERVED_TOP_LEVEL.contains(&rel.as_str()) {
             return Err(Error::wayside(format!(
                 "the state directory holds a top level directory named {rel}, \
@@ -358,10 +380,10 @@ fn read_state_dir(
         dirs_out.push(rel);
         read_state_dir(state, path, reader, entries, dirs_out)?;
     }
-    for path in &files {
+    for (path, is_link, is_regular) in &files {
         let rel = rel_of(path);
-        refuse_unrecordable_entry(path, &rel)?;
-        if !path.is_file() {
+        refuse_unrecordable_entry(path, &rel, *is_link)?;
+        if !is_regular {
             return Err(Error::wayside(format!(
                 "the state directory holds a non regular file at {rel}, \
                  which a checkpoint does not record"
