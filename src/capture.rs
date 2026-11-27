@@ -268,7 +268,7 @@ pub(crate) fn read_state_tree(state: &Path, reader: &StateTreeReader) -> Result<
     Ok((entries, dirs))
 }
 
-fn refuse_unrecordable_entry(path: &Path, rel: &str, is_link: bool) -> Result<()> {
+fn refuse_unrecordable_entry(path: &Path, rel: &str, is_link: bool, noun: &str) -> Result<()> {
     if is_link {
         return Err(Error::wayside(format!(
             "the state directory holds a symbolic link at {rel}, \
@@ -286,6 +286,13 @@ fn refuse_unrecordable_entry(path: &Path, rel: &str, is_link: bool) -> Result<()
         return Err(Error::wayside(format!(
             "the state directory holds an entry whose name carries \
              a backslash at {rel}, which a checkpoint does not record"
+        )));
+    }
+    if !rel.contains('/') && RESERVED_TOP_LEVEL.contains(&rel) {
+        return Err(Error::wayside(format!(
+            "the state directory holds a top level {noun} named {rel}, \
+             which is a name restore writes, so a checkpoint does \
+             not record it"
         )));
     }
     Ok(())
@@ -369,31 +376,17 @@ fn read_state_dir(
     };
     for (path, is_link) in &dirs {
         let rel = rel_of(path);
-        refuse_unrecordable_entry(path, &rel, *is_link)?;
-        if !rel.contains('/') && RESERVED_TOP_LEVEL.contains(&rel.as_str()) {
-            return Err(Error::wayside(format!(
-                "the state directory holds a top level directory named {rel}, \
-                 which is a name restore writes, so a checkpoint does \
-                 not record it"
-            )));
-        }
+        refuse_unrecordable_entry(path, &rel, *is_link, "directory")?;
         dirs_out.push(rel);
         read_state_dir(state, path, reader, entries, dirs_out)?;
     }
     for (path, is_link, is_regular) in &files {
         let rel = rel_of(path);
-        refuse_unrecordable_entry(path, &rel, *is_link)?;
+        refuse_unrecordable_entry(path, &rel, *is_link, "file")?;
         if !is_regular {
             return Err(Error::wayside(format!(
                 "the state directory holds a non regular file at {rel}, \
                  which a checkpoint does not record"
-            )));
-        }
-        if !rel.contains('/') && RESERVED_TOP_LEVEL.contains(&rel.as_str()) {
-            return Err(Error::wayside(format!(
-                "the state directory holds a top level file named {rel}, \
-                 which is a name restore writes, so a checkpoint does \
-                 not record it"
             )));
         }
         let data = fs::read(path).map_err(|exc| {
