@@ -1597,6 +1597,18 @@ fn checkpoint_refuses_a_symlinked_session_directory() {
     let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
     let error = expect_error(checkpoint(&store, "ghost", &state, None, b""));
     assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error.message().contains("the store is corrupt,"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error.message().contains(
+            "is a symbolic link, and the store holds only real directories and regular files"
+        ),
+        "{}",
+        error.message()
+    );
     assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
 }
 
@@ -1615,11 +1627,47 @@ fn reads_refuse_a_symlinked_session_directory() {
     .unwrap();
     let error = expect_error(list_checkpoints(&store, "ghost"));
     assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error.message().contains("the store is corrupt,"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error.message().contains(
+            "is a symbolic link, and the store holds only real directories and regular files"
+        ),
+        "{}",
+        error.message()
+    );
     let error = expect_error(show(&store, "ghost", 1));
     assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error.message().contains("the store is corrupt,"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error.message().contains(
+            "is a symbolic link, and the store holds only real directories and regular files"
+        ),
+        "{}",
+        error.message()
+    );
     let target = base.join("target");
     let error = expect_error(restore(&store, "ghost", 1, &target));
     assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error.message().contains("the store is corrupt,"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error.message().contains(
+            "is a symbolic link, and the store holds only real directories and regular files"
+        ),
+        "{}",
+        error.message()
+    );
     assert!(!target.exists());
 }
 
@@ -1635,8 +1683,32 @@ fn reads_and_writes_refuse_a_symlinked_checkpoints_directory() {
     std::os::unix::fs::symlink(&moved, &ckpts).unwrap();
     let error = expect_error(list_checkpoints(&store, "alpha"));
     assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error.message().contains("the store is corrupt,"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error.message().contains(
+            "is a symbolic link, and the store holds only real directories and regular files"
+        ),
+        "{}",
+        error.message()
+    );
     let error = expect_error(checkpoint(&store, "alpha", &state, None, b""));
     assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error.message().contains("the store is corrupt,"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error.message().contains(
+            "is a symbolic link, and the store holds only real directories and regular files"
+        ),
+        "{}",
+        error.message()
+    );
     let mut names: Vec<String> = std::fs::read_dir(&moved)
         .unwrap()
         .flatten()
@@ -1660,11 +1732,47 @@ fn reads_refuse_a_symlinked_sequence_directory() {
     std::os::unix::fs::symlink(checkpoint_dir(&planted, "alpha", 1), &link).unwrap();
     let error = expect_error(show(&store, "alpha", 2));
     assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error.message().contains("the store is corrupt,"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error.message().contains(
+            "is a symbolic link, and the store holds only real directories and regular files"
+        ),
+        "{}",
+        error.message()
+    );
     let error = expect_error(list_checkpoints(&store, "alpha"));
     assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error.message().contains("the store is corrupt,"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error.message().contains(
+            "is a symbolic link, and the store holds only real directories and regular files"
+        ),
+        "{}",
+        error.message()
+    );
     let target = base.join("target");
     let error = expect_error(restore(&store, "alpha", 2, &target));
     assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error.message().contains("the store is corrupt,"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error.message().contains(
+            "is a symbolic link, and the store holds only real directories and regular files"
+        ),
+        "{}",
+        error.message()
+    );
     assert!(!target.exists());
 }
 
@@ -1681,6 +1789,18 @@ fn reads_refuse_a_symlinked_manifest() {
     std::os::unix::fs::symlink(&copy, &path).unwrap();
     let error = expect_error(show(&store, "alpha", 1));
     assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error.message().contains("the store is corrupt,"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error.message().contains(
+            "is a symbolic link, and the store holds only real directories and regular files"
+        ),
+        "{}",
+        error.message()
+    );
 }
 
 #[test]
@@ -1699,7 +1819,57 @@ fn restore_refuses_a_symlinked_payload() {
     let target = base.join("target");
     let error = expect_error(restore(&store, "alpha", 1, &target));
     assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error.message().contains("the store is corrupt,"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error.message().contains(
+            "is a symbolic link, and the store holds only real directories and regular files"
+        ),
+        "{}",
+        error.message()
+    );
     assert!(!target.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn checkpoint_refuses_a_symlinked_sessions_directory() {
+    // WS-P97: the sessions directory itself is the first seat
+    // check_session_links judges, and no standing pin plants a
+    // link there, so the store link sentence stood unstaged at
+    // that seat whole. The lock creates the store root and its
+    // lock file only, so the sessions entry can stand as a link
+    // before checkpoint answers at the link check.
+    let base = temp_dir("write-link-sessions");
+    let store = base.join("store");
+    let outside = base.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::create_dir_all(&store).unwrap();
+    std::os::unix::fs::symlink(&outside, store.join("sessions")).unwrap();
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    let error = expect_error(checkpoint(&store, "alpha", &state, None, b""));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error.message().contains("the store is corrupt,"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error.message().contains("the sessions directory"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error.message().contains(
+            "is a symbolic link, and the store holds only real directories and regular files"
+        ),
+        "{}",
+        error.message()
+    );
+    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
 }
 
 fn reserved_recorded_name_case(tag: &str, reserved: &str) {
