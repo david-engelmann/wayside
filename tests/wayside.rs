@@ -1886,6 +1886,38 @@ fn checkpoint_refuses_a_symlinked_sessions_directory() {
     assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
 }
 
+#[cfg(unix)]
+#[test]
+fn checkpoint_refuses_a_symlinked_publish_name() {
+    // WS-P99: publish opens with a link arm ahead of its
+    // assembly, and no standing pin plants a link at a
+    // checkpoint's publish name, so that arm stood exercised
+    // by no staging. A dangling link at the next sequence's
+    // name counts nothing toward the published listing, whose
+    // directory test follows links, so the assignment under
+    // the lock takes that very sequence and the link arm
+    // fires on it ahead of any byte assembled.
+    let base = temp_dir("link-publish-name");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    let name = checkpoint_dir(&store, "alpha", 2);
+    std::os::unix::fs::symlink(base.join("missing-target"), &name).unwrap();
+    let error = expect_error(checkpoint(&store, "alpha", &state, None, b""));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error.message().contains(
+            "checkpoint 2 of session alpha cannot be published, a symbolic link stands at its name in the store"
+        ),
+        "{}",
+        error.message()
+    );
+    assert!(std::fs::symlink_metadata(&name)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+}
+
 fn reserved_recorded_name_case(tag: &str, reserved: &str) {
     let base = temp_dir(tag);
     let store = base.join("store");
