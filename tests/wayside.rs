@@ -847,6 +847,22 @@ fn manifest_with_a_wrong_format_is_refused() {
     assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
 }
 
+#[test]
+fn manifest_with_an_array_top_level_is_refused() {
+    let base = temp_dir("top-array");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
+    checkpoint(&store, "alpha", &state, None, b"").unwrap();
+    damage_manifest_text(&store, "alpha", 1, &|_text| "[]".to_string());
+    let error = expect_error(show(&store, "alpha", 1));
+    assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error.message().contains("the top level is not an object"),
+        "{}",
+        error.message()
+    );
+}
+
 /// WS-A35: the files list order judgement refuses a manifest
 /// whose file entries stand out of path order. The pin guards
 /// the judgement the adjacent pair repair must not move: it
@@ -2181,6 +2197,34 @@ fn manifest_with_a_wrong_typed_value_is_refused_created_at_unparseable() {
         error
             .message()
             .contains("the created_at does not parse as a timestamp"),
+        "{}",
+        error.message()
+    );
+}
+
+#[test]
+fn manifest_with_an_extra_memory_field_is_refused() {
+    let error = wrong_typed_value_case("type-memory-extra", &|value| {
+        value["memory"]["extra"] = serde_json::json!(1);
+    });
+    assert!(
+        error
+            .message()
+            .contains("the memory entry does not carry exactly sha256 and size"),
+        "{}",
+        error.message()
+    );
+}
+
+#[test]
+fn manifest_with_an_extra_file_field_is_refused() {
+    let error = wrong_typed_value_case("type-file-extra", &|value| {
+        value["files"][0]["extra"] = serde_json::json!(1);
+    });
+    assert!(
+        error
+            .message()
+            .contains("a file entry does not carry exactly path and sha256 and size"),
         "{}",
         error.message()
     );
