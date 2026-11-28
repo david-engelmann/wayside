@@ -274,14 +274,12 @@ fn ci_runs_on_push_and_on_pull_request() {
 #[test]
 fn ci_gate_parser_skips_a_step_disabled_with_if_false() {
     let ci_text = read(".github/workflows/ci.yml");
-    let gate_step = "      - name: Run the local gate\n        run: cargo test";
+    let gate_step = "      - name: Run the tests\n        run: cargo test";
     assert!(ci_text.contains(gate_step));
     for flag in ["false", "\"false\""] {
         let disabled = ci_text.replace(
             gate_step,
-            &format!(
-                "      - name: Run the local gate\n        if: {flag}\n        run: cargo test"
-            ),
+            &format!("      - name: Run the tests\n        if: {flag}\n        run: cargo test"),
         );
         let commands = run_commands(&disabled);
         assert!(!commands.iter().any(|c| c == GATE_COMMAND));
