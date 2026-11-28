@@ -65,11 +65,14 @@ struct ProbeRule {
 ///
 /// Round 4 extends the seam to the reads a bundle capture
 /// makes: the bytes of a member and the standing of a sidecar
-/// name. Staged readers override one path from its second read
-/// or its second standing probe onward, so a pin can stage a
-/// bundle that changes between the two passes of WS-13
-/// deterministically, without racing a real writer. The
-/// default reader reads and stats the files themselves.
+/// name. Staged readers override one path from a named read or
+/// a named standing probe onward, from the second read or the
+/// second standing probe for the readers staging a change
+/// between the passes and from the first bundle read for the
+/// serving reader, so a pin can stage a bundle that changes
+/// between the two passes of WS-13 deterministically, without
+/// racing a real writer. The default reader reads and stats the
+/// files themselves.
 pub struct StateTreeReader {
     lister: Box<Lister>,
     byte_rules: Vec<ByteRule>,
