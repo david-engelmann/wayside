@@ -276,6 +276,38 @@ fn checkpoint_refuses_a_symlink_in_the_state_tree() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn checkpoint_refuses_a_dangling_symlink_in_the_state_tree() {
+    // WS-P96: the walk classifies a link by the metadata that
+    // follows it, and a link whose target does not stand fails
+    // that followed read, the failure folding to false so the
+    // entry lands in the files list carrying its link fact and
+    // the link refusal answers. Every standing link staging
+    // names a target that stands, so the fold seat stood
+    // exercised by no pin.
+    let base = temp_dir("state-dangling-link");
+    let store = base.join("store");
+    let state = make_state(&base.join("state"), &[("real.txt", b"real")]);
+    std::os::unix::fs::symlink(state.join("missing.txt"), state.join("dangling.txt")).unwrap();
+    let error = expect_error(checkpoint(&store, "alpha", &state, None, b""));
+    assert!(matches!(error, Error::Wayside(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("the state directory holds a symbolic link at"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error
+            .message()
+            .contains("which a checkpoint does not record"),
+        "{}",
+        error.message()
+    );
+}
+
 #[test]
 fn checkpoint_refuses_a_non_regular_file_in_the_state_tree() {
     let base = temp_dir("state-fifo");
