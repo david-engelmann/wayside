@@ -2055,7 +2055,7 @@ fn sequence_allocation_past_the_top_of_the_range_is_refused() {
     assert_eq!(names, ["000001", "9223372036854775807"]);
 }
 
-fn wrong_typed_value_case(tag: &str, damage: &dyn Fn(&mut serde_json::Value)) {
+fn wrong_typed_value_case(tag: &str, damage: &dyn Fn(&mut serde_json::Value)) -> Error {
     let base = temp_dir(tag);
     let store = base.join("store");
     let state = make_state(&base.join("state"), &[("a.txt", b"a")]);
@@ -2064,6 +2064,7 @@ fn wrong_typed_value_case(tag: &str, damage: &dyn Fn(&mut serde_json::Value)) {
     damage_manifest_json(&store, "alpha", 1, damage);
     let error = expect_error(show(&store, "alpha", 1));
     assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    error
 }
 
 #[test]
@@ -2096,16 +2097,28 @@ fn manifest_with_a_wrong_typed_value_is_refused_sequence_as_string() {
 
 #[test]
 fn manifest_with_a_wrong_typed_value_is_refused_created_at_not_text() {
-    wrong_typed_value_case("type-created-num", &|value| {
+    let error = wrong_typed_value_case("type-created-num", &|value| {
         value["created_at"] = serde_json::json!(12345);
     });
+    assert!(
+        error.message().contains("the created_at is not text"),
+        "{}",
+        error.message()
+    );
 }
 
 #[test]
 fn manifest_with_a_wrong_typed_value_is_refused_created_at_unparseable() {
-    wrong_typed_value_case("type-created-text", &|value| {
+    let error = wrong_typed_value_case("type-created-text", &|value| {
         value["created_at"] = serde_json::json!("not a timestamp");
     });
+    assert!(
+        error
+            .message()
+            .contains("the created_at does not parse as a timestamp"),
+        "{}",
+        error.message()
+    );
 }
 
 #[test]
