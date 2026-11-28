@@ -2069,9 +2069,32 @@ fn wrong_typed_value_case(tag: &str, damage: &dyn Fn(&mut serde_json::Value)) ->
 
 #[test]
 fn manifest_with_a_wrong_typed_value_is_refused_size_as_string() {
-    wrong_typed_value_case("type-size", &|value| {
+    let error = wrong_typed_value_case("type-size", &|value| {
         value["files"][0]["size"] = serde_json::json!("3");
     });
+    assert!(
+        error
+            .message()
+            .contains("the file entry for a.txt carries no sound size"),
+        "{}",
+        error.message()
+    );
+}
+
+#[test]
+fn manifest_with_a_non_hex_hash_is_refused_file_entry() {
+    let error = wrong_typed_value_case("type-hash-nonhex", &|value| {
+        let mut sha = String::from("g");
+        sha.push_str(&"0".repeat(63));
+        value["files"][0]["sha256"] = serde_json::json!(sha);
+    });
+    assert!(
+        error
+            .message()
+            .contains("the file entry for a.txt carries no sound SHA-256"),
+        "{}",
+        error.message()
+    );
 }
 
 #[test]
