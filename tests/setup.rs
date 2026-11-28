@@ -104,11 +104,12 @@ fn if_value_is_false(line: &str) -> bool {
     let Some(value) = line.strip_prefix("if:") else {
         return false;
     };
-    value
-        .trim()
-        .trim_matches(|c| c == '\'' || c == '"')
-        .to_lowercase()
-        == "false"
+    let value = value.trim();
+    let value = match value.strip_prefix("${{").and_then(|v| v.strip_suffix("}}")) {
+        Some(inner) => inner.trim(),
+        None => value,
+    };
+    value.trim_matches(|c| c == '\'' || c == '"').to_lowercase() == "false"
 }
 
 fn flush_step(step_lines: &mut Vec<String>, commands: &mut Vec<String>) {
@@ -276,7 +277,15 @@ fn ci_gate_parser_skips_a_step_disabled_with_if_false() {
     let ci_text = read(".github/workflows/ci.yml");
     let gate_step = "      - name: Run the tests\n        run: cargo test";
     assert!(ci_text.contains(gate_step));
-    for flag in ["false", "\"false\"", "'false'", "False"] {
+    for flag in [
+        "false",
+        "\"false\"",
+        "'false'",
+        "False",
+        "${{ false }}",
+        "${{false}}",
+        "${{ 'false' }}",
+    ] {
         let disabled = ci_text.replace(
             gate_step,
             &format!("      - name: Run the tests\n        if: {flag}\n        run: cargo test"),
@@ -292,7 +301,15 @@ fn ci_gate_parser_rejects_a_job_disabled_with_if_false() {
     let ci_text = read(".github/workflows/ci.yml");
     let job_head = "  test:\n    runs-on: ubuntu-latest";
     assert!(ci_text.contains(job_head));
-    for flag in ["false", "\"false\"", "'false'", "False"] {
+    for flag in [
+        "false",
+        "\"false\"",
+        "'false'",
+        "False",
+        "${{ false }}",
+        "${{false}}",
+        "${{ 'false' }}",
+    ] {
         let disabled = ci_text.replace(
             job_head,
             &format!("  test:\n    if: {flag}\n    runs-on: ubuntu-latest"),
@@ -370,7 +387,15 @@ fn ci_carries_the_binding_job_undisabled_with_its_smoke_command() {
     let job_head = "  binding:\n    runs-on: ubuntu-latest";
     assert!(ci_text.contains(job_head));
     assert!(binding_smoke_command_stands(&ci_text));
-    for flag in ["false", "\"false\"", "'false'", "False"] {
+    for flag in [
+        "false",
+        "\"false\"",
+        "'false'",
+        "False",
+        "${{ false }}",
+        "${{false}}",
+        "${{ 'false' }}",
+    ] {
         let disabled = ci_text.replace(
             job_head,
             &format!("  binding:\n    if: {flag}\n    runs-on: ubuntu-latest"),
@@ -379,7 +404,15 @@ fn ci_carries_the_binding_job_undisabled_with_its_smoke_command() {
     }
     let smoke_step = "      - name: Build the binding and run the smoke test\n        run: |";
     assert!(ci_text.contains(smoke_step));
-    for flag in ["false", "\"false\"", "'false'", "False"] {
+    for flag in [
+        "false",
+        "\"false\"",
+        "'false'",
+        "False",
+        "${{ false }}",
+        "${{false}}",
+        "${{ 'false' }}",
+    ] {
         let disabled = ci_text.replace(
             smoke_step,
             &format!(
