@@ -2105,6 +2105,48 @@ fn manifest_with_a_wrong_typed_value_is_refused_env_as_list() {
 }
 
 #[test]
+fn manifest_with_an_unsound_env_key_is_refused() {
+    let error = wrong_typed_value_case("type-env-key", &|value| {
+        value["env"] = serde_json::json!({"1BAD": "V"});
+    });
+    assert!(
+        error
+            .message()
+            .contains("the env key '1BAD' is not a sound env name"),
+        "{}",
+        error.message()
+    );
+}
+
+#[test]
+fn manifest_with_a_newline_env_value_is_refused() {
+    let error = wrong_typed_value_case("type-env-newline", &|value| {
+        value["env"] = serde_json::json!({"BAD": "first\nsecond"});
+    });
+    assert!(
+        error
+            .message()
+            .contains("the env value for BAD is not a single line of text"),
+        "{}",
+        error.message()
+    );
+}
+
+#[test]
+fn manifest_with_a_numeric_env_value_is_refused() {
+    let error = wrong_typed_value_case("type-env-number", &|value| {
+        value["env"] = serde_json::json!({"K": 3});
+    });
+    assert!(
+        error
+            .message()
+            .contains("the env value for K is not a single line of text"),
+        "{}",
+        error.message()
+    );
+}
+
+#[test]
 fn manifest_with_a_wrong_typed_value_is_refused_files_as_object() {
     wrong_typed_value_case("type-files", &|value| {
         value["files"] = serde_json::json!({});
