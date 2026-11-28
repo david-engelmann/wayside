@@ -445,6 +445,24 @@ fn directories_empty_array_is_refused() {
 }
 
 #[test]
+fn directories_of_the_wrong_type_is_refused() {
+    let (_base, store) = directories_store("damage-type");
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["directories"] = serde_json::json!({});
+    });
+    expect_corrupt(&store);
+    let error = expect_error(show(&store, "alpha", 1));
+    assert_eq!(error.exit_code(), 2, "{}", error.message());
+    assert!(
+        error
+            .message()
+            .contains("the directories entry is not a list"),
+        "{}",
+        error.message()
+    );
+}
+
+#[test]
 fn directories_out_of_order_is_refused() {
     let (_base, store) = directories_store("damage-order");
     damage_manifest_json(&store, "alpha", 1, &|value| {

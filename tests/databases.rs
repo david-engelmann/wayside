@@ -1295,6 +1295,54 @@ fn v2_manifest_missing_the_databases_field_is_refused() {
     expect_corrupt_show(&store);
 }
 
+#[test]
+fn v2_manifest_with_databases_of_the_wrong_type_is_refused() {
+    let (_base, store) = damaged_v2_store("damage-databases-type");
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["databases"] = serde_json::json!({});
+    });
+    let error = expect_corrupt_show(&store);
+    assert!(
+        error
+            .message()
+            .contains("the databases entry is not a list"),
+        "{}",
+        error.message()
+    );
+}
+
+#[test]
+fn v2_manifest_with_an_empty_members_list_is_refused() {
+    let (_base, store) = damaged_v2_store("damage-no-members");
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["databases"][0]["members"] = serde_json::json!([]);
+    });
+    let error = expect_corrupt_show(&store);
+    assert!(
+        error
+            .message()
+            .contains("the database at data/app.db carries no members"),
+        "{}",
+        error.message()
+    );
+}
+
+#[test]
+fn v2_manifest_with_an_extra_member_field_is_refused() {
+    let (_base, store) = damaged_v2_store("damage-member-extra-field");
+    damage_manifest_json(&store, "alpha", 1, &|value| {
+        value["databases"][0]["members"][0]["extra"] = serde_json::json!(1);
+    });
+    let error = expect_corrupt_show(&store);
+    assert!(
+        error
+            .message()
+            .contains("a database member entry does not carry exactly path and sha256 and size"),
+        "{}",
+        error.message()
+    );
+}
+
 // WS-16, restore and fork of database payloads.
 
 #[test]
