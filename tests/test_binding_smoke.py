@@ -243,11 +243,11 @@ def test_sequence_refuses_booleans(tmp_path):
 
     with pytest.raises(TypeError) as shown:
         wayside.show(store, "alpha", True)
-    assert "sequence" in str(shown.value)
+    assert str(shown.value) == "sequence must be an integer, not a boolean"
 
     with pytest.raises(TypeError) as restored:
         wayside.restore(store, "alpha", False, str(tmp_path / "target"))
-    assert "sequence" in str(restored.value)
+    assert str(restored.value) == "sequence must be an integer, not a boolean"
 
     assert not (tmp_path / "target").exists()
     assert wayside.show(store, "alpha", 1)["sequence"] == 1
