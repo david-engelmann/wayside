@@ -761,6 +761,32 @@ fn codepoint_scan_refuses_an_argument_past_the_root() {
     );
 }
 
+// WS-P105: the scanner's default root stands pinned.
+// The module doc names the current directory as the
+// root a bare call scans, where the setup scanner this
+// binary ports defaulted to the root of the repo it
+// shipped in. Every other drive in this suite names
+// its root, so a scanner defaulting to the executable's
+// own directory, or to the tree the binary shipped in,
+// passes them all whole. This pin stages a tree
+// holding one em dash and no en dash and drives the
+// scanner bare with its current directory set to that
+// tree, so the counts answer for the staged tree alone
+// or the pin fails.
+#[test]
+fn codepoint_scan_with_no_argument_scans_the_current_directory() {
+    let dir = temp_dir("default-root");
+    std::fs::write(dir.join("note.md"), "\u{2014}").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_codepoint_scan"))
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code().unwrap_or(-1), 1);
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(stdout.contains("em dash U+2014 count 1"), "{stdout}");
+    assert!(stdout.contains("en dash U+2013 count 0"), "{stdout}");
+}
+
 /// WS-A26: a scan whose output cannot be written is a scan
 /// error at exit 2, never a panic. The pin points the
 /// scanner's standard output at /dev/full, whose every write
