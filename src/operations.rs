@@ -395,10 +395,10 @@ pub fn fork(
     validate_session_id(source_session)?;
     validate_session_id(new_session)?;
     validate_sequence(sequence)?;
-    let _lock = locked(store)?;
     check_session_links(store, new_session)?;
     let manifest = load_manifest(store, source_session, sequence)?;
     let (entries, memory) = read_verified(store, source_session, sequence, &manifest)?;
+    let _lock = locked(store)?;
     if !published_sequences(store, new_session).is_empty() {
         return Err(Error::wayside(format!(
             "session {new_session} already holds a checkpoint in \
