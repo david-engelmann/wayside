@@ -47,7 +47,7 @@ jobs:
               actual = os.environ.get("REF_NAME", "")
               assert actual == expected, f"tag {actual} does not match Cargo.toml {expected}"
           PY
-      - name: Run the local gate
+      - name: Run the tests
         run: cargo test --locked
       - name: Run the codepoint scan
         run: cargo run --locked --bin codepoint_scan
