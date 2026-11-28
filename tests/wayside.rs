@@ -613,6 +613,13 @@ fn flipped_payload_byte_fails_restore_and_places_nothing() {
     let target = base.join("target");
     let error = expect_error(restore(&store, "alpha", 1, &target));
     assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("the payload for a.txt does not match its recorded hash and size"),
+        "{}",
+        error.message()
+    );
     assert!(!target.exists());
 }
 
@@ -630,6 +637,13 @@ fn flipped_memory_byte_fails_restore_and_places_nothing() {
     let target = base.join("target");
     let error = expect_error(restore(&store, "alpha", 1, &target));
     assert!(matches!(error, Error::Corrupt(_)), "{error:?}");
+    assert!(
+        error
+            .message()
+            .contains("the memory document does not match its recorded hash and size"),
+        "{}",
+        error.message()
+    );
     assert!(!target.exists());
 }
 
