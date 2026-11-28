@@ -469,6 +469,15 @@ fn directory_path_also_recorded_as_file_is_refused() {
         value["directories"] = serde_json::json!(["plan.txt"]);
     });
     expect_corrupt(&store);
+    let error = expect_error(show(&store, "alpha", 1));
+    assert_eq!(error.exit_code(), 2, "{}", error.message());
+    assert!(
+        error.message().contains(
+            "the path plan.txt stands both in the files list and in the directories list"
+        ),
+        "{}",
+        error.message()
+    );
 }
 
 #[test]
@@ -503,6 +512,15 @@ fn directory_above_a_database_member_is_refused() {
         value["directories"] = serde_json::json!(["data"]);
     });
     expect_corrupt(&store);
+    let error = expect_error(show(&store, "alpha", 1));
+    assert_eq!(error.exit_code(), 2, "{}", error.message());
+    assert!(
+        error
+            .message()
+            .contains("the directory data stands above a database member"),
+        "{}",
+        error.message()
+    );
 }
 
 /// WS-A36: a recorded directory path that is also a database
@@ -525,6 +543,15 @@ fn directory_equal_to_a_database_member_is_refused() {
         value["directories"] = serde_json::json!(["data/app.db"]);
     });
     expect_corrupt(&store);
+    let error = expect_error(show(&store, "alpha", 1));
+    assert_eq!(error.exit_code(), 2, "{}", error.message());
+    assert!(
+        error.message().contains(
+            "the path data/app.db stands both in a database entry and in the directories list"
+        ),
+        "{}",
+        error.message()
+    );
 }
 
 #[test]
@@ -552,6 +579,15 @@ fn directory_below_a_recorded_file_is_refused() {
         value["directories"] = serde_json::json!(["plan.txt/sub"]);
     });
     expect_corrupt(&store);
+    let error = expect_error(show(&store, "alpha", 1));
+    assert_eq!(error.exit_code(), 2, "{}", error.message());
+    assert!(
+        error
+            .message()
+            .contains("the directory plan.txt/sub stands below a recorded file"),
+        "{}",
+        error.message()
+    );
 }
 
 #[test]
@@ -571,6 +607,15 @@ fn directory_below_a_database_member_is_refused() {
         value["directories"] = serde_json::json!(["data/app.db/sub"]);
     });
     expect_corrupt(&store);
+    let error = expect_error(show(&store, "alpha", 1));
+    assert_eq!(error.exit_code(), 2, "{}", error.message());
+    assert!(
+        error
+            .message()
+            .contains("the directory data/app.db/sub stands below a database member"),
+        "{}",
+        error.message()
+    );
 }
 
 #[test]
